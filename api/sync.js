@@ -28,14 +28,14 @@ export default async function handler(req, res) {
 
     const tags = await tagsRes.json();
 
-    // Map: clientId → [tags]
+    // Map clientId → [tags]
     const clientTags = {};
     for (const tag of tags) {
       if (!clientTags[tag.ClientId]) clientTags[tag.ClientId] = [];
       clientTags[tag.ClientId].push(tag.Tag);
     }
 
-    // Build client map: company name → details
+    // Map clientName → metadata
     const clientMap = {};
     for (const c of clients) {
       clientMap[c.Name] = {
@@ -61,23 +61,25 @@ export default async function handler(req, res) {
 
     //
     // -----------------------
-    // 4. UPSERT INTO SOFTR TABLE
+    // 4. UPSERT INTO SOFTR
     // -----------------------
     //
     for (const c of contacts) {
-      if (!c.Email) continue; // Softr requires email
+      if (!c.Email) continue;
 
       const company = c.Customer;
       const companyData = clientMap[company] || {};
 
-      // SAFELY ensure tags is always an array
-      const safeTags = Array.isArray(companyData.tags)
+      // ALWAYS convert tags to Softr’s required format:
+      const rawTags = Array.isArray(companyData.tags)
         ? companyData.tags
         : companyData.tags
         ? [companyData.tags]
         : [];
 
-      // Softr user payload
+      const formattedTags = rawTags.map(t => ({ name: t }));
+
+      // Build the Softr payload
       const payload = {
         fields: {
           email: c.Email,
@@ -85,14 +87,14 @@ export default async function handler(req, res) {
           last_name: c.LastName || "",
           company_name: company || "",
           price_list: companyData.price_list || "",
-          tags: safeTags,
+          tags: formattedTags,
           zig_contact_id: c.ContactId,
           zig_client_id: companyData.zig_client_id || null
         }
       };
 
       //
-      // CHECK IF USER EXISTS BY EMAIL
+      // CHECK IF USER EXISTS
       //
       const existing = await fetch(
         `https://studio.softr.io/api/v1/datasets/hqfMbliV2UtsY2/records?filter=(email,eq,${encodeURIComponent(
@@ -103,13 +105,12 @@ export default async function handler(req, res) {
             Authorization: `Bearer ${process.env.SOFTR_API_KEY}`
           }
         }
-      ).then((r) => r.json());
+      ).then(r => r.json());
 
       //
-      // UPDATE OR CREATE
+      // UPDATE or CREATE
       //
       if (existing?.records?.length > 0) {
-        // Update existing record
         const recordId = existing.records[0].id;
 
         await fetch(
@@ -124,7 +125,6 @@ export default async function handler(req, res) {
           }
         );
       } else {
-        // Create new record
         await fetch(
           `https://studio.softr.io/api/v1/datasets/hqfMbliV2UtsY2/records`,
           {
@@ -139,12 +139,8 @@ export default async function handler(req, res) {
       }
     }
 
-    //
-    // -----------------------
-    // SUCCESS
-    // -----------------------
-    //
     res.status(200).json({ ok: true });
+
   } catch (error) {
     console.error("SYNC ERROR:", error);
     res.status(500).json({ error: error.message });
