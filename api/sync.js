@@ -1,9 +1,7 @@
 export default async function handler(req, res) {
   try {
     //
-    // -----------------------
     // 1. FETCH CLIENTS
-    // -----------------------
     //
     const clientsRes = await fetch(`${process.env.ZIG_BASE_URL}/Clients`, {
       headers: {
@@ -15,9 +13,7 @@ export default async function handler(req, res) {
     const clients = await clientsRes.json();
 
     //
-    // -----------------------
     // 2. FETCH CLIENT TAGS
-    // -----------------------
     //
     const tagsRes = await fetch(`${process.env.ZIG_BASE_URL}/ClientTags`, {
       headers: {
@@ -31,11 +27,13 @@ export default async function handler(req, res) {
     // Map: clientId → [tags]
     const clientTags = {};
     for (const tag of tags) {
-      if (!clientTags[tag.ClientId]) clientTags[tag.ClientId] = [];
+      if (!clientTags[tag.ClientId]) {
+        clientTags[tag.ClientId] = [];
+      }
       clientTags[tag.ClientId].push(tag.Tag);
     }
 
-    // Build client map: company name → details
+    // Build client map: company name → metadata
     const clientMap = {};
     for (const c of clients) {
       clientMap[c.Name] = {
@@ -46,9 +44,7 @@ export default async function handler(req, res) {
     }
 
     //
-    // -----------------------
     // 3. FETCH CONTACTS
-    // -----------------------
     //
     const contactsRes = await fetch(`${process.env.ZIG_BASE_URL}/Contacts`, {
       headers: {
@@ -60,17 +56,15 @@ export default async function handler(req, res) {
     const contacts = await contactsRes.json();
 
     //
-    // -----------------------
     // 4. UPSERT INTO SOFTR
-    // -----------------------
     //
     for (const c of contacts) {
       if (!c.Email) continue;
 
-      const company = c.Customer;
-      const companyData = clientMap[company] || {};
+      const companyName = c.Customer;
+      const companyData = clientMap[companyName] || {};
 
-      // Convert tags array → "tag1, tag2, tag3"
+      // Convert tags array → single comma-separated string
       const rawTags = Array.isArray(companyData.tags)
         ? companyData.tags
         : companyData.tags
@@ -80,3 +74,69 @@ export default async function handler(req, res) {
       const tagString = rawTags.join(", ");
 
       const payload = {
+        fields: {
+          email: c.Email,
+          first_name: c.FirstName || "",
+          last_name: c.LastName || "",
+          company_name: companyName || "",
+          price_list: companyData.price_list || "",
+          tags: tagString,
+          zig_contact_id: c.ContactId || "",
+          zig_client_id: companyData.zig_client_id || ""
+        }
+      };
+
+      //
+      // Lookup by email
+      //
+      const existingRes = await fetch(
+        `https://studio.softr.io/api/v1/datasets/hqfMbliV2UtsY2/records?filter=(email,eq,${encodeURIComponent(
+          c.Email
+        )})`,
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.SOFTR_API_KEY}`
+          }
+        }
+      );
+
+      const existing = await existingRes.json();
+
+      //
+      // UPDATE or CREATE
+      //
+      if (existing?.records?.length > 0) {
+        const recordId = existing.records[0].id;
+
+        await fetch(
+          `https://studio.softr.io/api/v1/datasets/hqfMbliV2UtsY2/records/${recordId}`,
+          {
+            method: "PATCH",
+            headers: {
+              Authorization: `Bearer ${process.env.SOFTR_API_KEY}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify(payload)
+          }
+        );
+      } else {
+        await fetch(
+          `https://studio.softr.io/api/v1/datasets/hqfMbliV2UtsY2/records`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${process.env.SOFTR_API_KEY}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify(payload)
+          }
+        );
+      }
+    }
+
+    res.status(200).json({ ok: true });
+  } catch (error) {
+    console.error("SYNC ERROR:", error);
+    res.status(500).json({ error: error.message });
+  }
+}
