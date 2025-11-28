@@ -1,7 +1,9 @@
 export default async function handler(req, res) {
   try {
     //
+    // -----------------------
     // 1. FETCH CLIENTS
+    // -----------------------
     //
     const clientsRes = await fetch(`${process.env.ZIG_BASE_URL}/Clients`, {
       headers: {
@@ -13,7 +15,9 @@ export default async function handler(req, res) {
     const clients = await clientsRes.json();
 
     //
+    // -----------------------
     // 2. FETCH CLIENT TAGS
+    // -----------------------
     //
     const tagsRes = await fetch(`${process.env.ZIG_BASE_URL}/ClientTags`, {
       headers: {
@@ -24,14 +28,14 @@ export default async function handler(req, res) {
 
     const tags = await tagsRes.json();
 
-    // Map clientId → [tags]
+    // Map: clientId → [tags]
     const clientTags = {};
     for (const tag of tags) {
       if (!clientTags[tag.ClientId]) clientTags[tag.ClientId] = [];
       clientTags[tag.ClientId].push(tag.Tag);
     }
 
-    // Map clientName → { price_list, zig_client_id, tags }
+    // Build client map: company name → details
     const clientMap = {};
     for (const c of clients) {
       clientMap[c.Name] = {
@@ -42,7 +46,9 @@ export default async function handler(req, res) {
     }
 
     //
+    // -----------------------
     // 3. FETCH CONTACTS
+    // -----------------------
     //
     const contactsRes = await fetch(`${process.env.ZIG_BASE_URL}/Contacts`, {
       headers: {
@@ -54,14 +60,24 @@ export default async function handler(req, res) {
     const contacts = await contactsRes.json();
 
     //
-    // 4. UPSERT INTO SOFTR USERS TABLE
+    // -----------------------
+    // 4. UPSERT INTO SOFTR TABLE
+    // -----------------------
     //
     for (const c of contacts) {
-      if (!c.Email) continue;
+      if (!c.Email) continue; // Softr requires email
 
       const company = c.Customer;
       const companyData = clientMap[company] || {};
 
+      // SAFELY ensure tags is always an array
+      const safeTags = Array.isArray(companyData.tags)
+        ? companyData.tags
+        : companyData.tags
+        ? [companyData.tags]
+        : [];
+
+      // Softr user payload
       const payload = {
         fields: {
           email: c.Email,
@@ -69,32 +85,39 @@ export default async function handler(req, res) {
           last_name: c.LastName || "",
           company_name: company || "",
           price_list: companyData.price_list || "",
-          tags: companyData.tags || [],
+          tags: safeTags,
           zig_contact_id: c.ContactId,
           zig_client_id: companyData.zig_client_id || null
         }
       };
 
-      // Check if user exists in Softr by email
+      //
+      // CHECK IF USER EXISTS BY EMAIL
+      //
       const existing = await fetch(
-        `https://studio.softr.io/api/v1/datasets/hqfMbliV2UtsY2/records?filter=(email,eq,${encodeURIComponent(c.Email)})`,
+        `https://studio.softr.io/api/v1/datasets/hqfMbliV2UtsY2/records?filter=(email,eq,${encodeURIComponent(
+          c.Email
+        )})`,
         {
           headers: {
-            "Authorization": `Bearer ${process.env.SOFTR_API_KEY}`
+            Authorization: `Bearer ${process.env.SOFTR_API_KEY}`
           }
         }
-      ).then(r => r.json());
+      ).then((r) => r.json());
 
+      //
+      // UPDATE OR CREATE
+      //
       if (existing?.records?.length > 0) {
+        // Update existing record
         const recordId = existing.records[0].id;
 
-        // Update existing record
         await fetch(
           `https://studio.softr.io/api/v1/datasets/hqfMbliV2UtsY2/records/${recordId}`,
           {
             method: "PATCH",
             headers: {
-              "Authorization": `Bearer ${process.env.SOFTR_API_KEY}`,
+              Authorization: `Bearer ${process.env.SOFTR_API_KEY}`,
               "Content-Type": "application/json"
             },
             body: JSON.stringify(payload)
@@ -107,7 +130,7 @@ export default async function handler(req, res) {
           {
             method: "POST",
             headers: {
-              "Authorization": `Bearer ${process.env.SOFTR_API_KEY}`,
+              Authorization: `Bearer ${process.env.SOFTR_API_KEY}`,
               "Content-Type": "application/json"
             },
             body: JSON.stringify(payload)
@@ -116,8 +139,12 @@ export default async function handler(req, res) {
       }
     }
 
+    //
+    // -----------------------
+    // SUCCESS
+    // -----------------------
+    //
     res.status(200).json({ ok: true });
-
   } catch (error) {
     console.error("SYNC ERROR:", error);
     res.status(500).json({ error: error.message });
