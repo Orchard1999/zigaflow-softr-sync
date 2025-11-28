@@ -13,33 +13,22 @@ export default async function handler(req, res) {
     const clients = await clientsRes.json();
 
     //
-    // 2. FETCH CLIENT TAGS
+    // 2. FETCH CLIENT TAGS (IGNORED)
     //
-    const tagsRes = await fetch(`${process.env.ZIG_BASE_URL}/ClientTags`, {
+    // We no longer use tags, but leave this call if you want to add later.
+    await fetch(`${process.env.ZIG_BASE_URL}/ClientTags`, {
       headers: {
         "apikey": process.env.ZIG_API_KEY,
         "Content-Type": "application/json"
       }
     });
 
-    const tags = await tagsRes.json();
-
-    // Map: clientId → [tags]
-    const clientTags = {};
-    for (const tag of tags) {
-      if (!clientTags[tag.ClientId]) {
-        clientTags[tag.ClientId] = [];
-      }
-      clientTags[tag.ClientId].push(tag.Tag);
-    }
-
-    // Build client map: company name → metadata
+    // Build minimal client map (no tags)
     const clientMap = {};
     for (const c of clients) {
       clientMap[c.Name] = {
         zig_client_id: c.Id,
-        price_list: c.PriceListName || c.PriceListId || "",
-        tags: clientTags[c.Id] || []
+        price_list: c.PriceListName || c.PriceListId || ""
       };
     }
 
@@ -56,39 +45,28 @@ export default async function handler(req, res) {
     const contacts = await contactsRes.json();
 
     //
-    // 4. UPSERT INTO SOFTR
+    // 4. UPSERT INTO SOFTR (NO TAGS)
     //
     for (const c of contacts) {
       if (!c.Email) continue;
 
-      const companyName = c.Customer;
-      const companyData = clientMap[companyName] || {};
+      const company = c.Customer;
+      const companyData = clientMap[company] || {};
 
-      // Convert tags array → single comma-separated string
-      const rawTags = Array.isArray(companyData.tags)
-        ? companyData.tags
-        : companyData.tags
-        ? [companyData.tags]
-        : [];
-
-      const tagString = rawTags.join(", ");
-
+      // Payload WITHOUT TAGS
       const payload = {
         fields: {
           email: c.Email,
           first_name: c.FirstName || "",
           last_name: c.LastName || "",
-          company_name: companyName || "",
+          company_name: company || "",
           price_list: companyData.price_list || "",
-          tags: tagString,
           zig_contact_id: c.ContactId || "",
           zig_client_id: companyData.zig_client_id || ""
         }
       };
 
-      //
-      // Lookup by email
-      //
+      // Lookup existing record
       const existingRes = await fetch(
         `https://studio.softr.io/api/v1/datasets/hqfMbliV2UtsY2/records?filter=(email,eq,${encodeURIComponent(
           c.Email
@@ -102,9 +80,6 @@ export default async function handler(req, res) {
 
       const existing = await existingRes.json();
 
-      //
-      // UPDATE or CREATE
-      //
       if (existing?.records?.length > 0) {
         const recordId = existing.records[0].id;
 
