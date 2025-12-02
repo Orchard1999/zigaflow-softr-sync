@@ -1,5 +1,13 @@
 {
   "name": "zigaflow-softr-sync",
   "version": "1.0.0",
-  "type": "module"
+  "description": "Sync integration between Zigaflow CRM and Softr database",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vercel dev"
+  },
+  "keywords": ["zigaflow", "softr", "sync", "crm"],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {}
 }
