@@ -1,1 +1,12 @@
-{}
+{
+  "version": 2,
+  "env": {
+    "SOFTR_API_KEY": "@softr-api-key",
+    "SOFTR_DATABASE_ID": "@softr-database-id",
+    "SOFTR_CUSTOMERS_TABLE_ID": "@softr-customers-table-id",
+    "ZIGAFLOW_API_KEY": "@zigaflow-api-key",
+    "ZIGAFLOW_BASE_URL": "@zigaflow-base-url",
+    "ADMIN_API_KEY": "@admin-api-key"
+  },
+  "crons": []
+}
