@@ -25,24 +25,44 @@ export default async function handler(req, res) {
   try {
     console.log('🔄 Starting Zigaflow → Softr customer sync...');
 
-    // Step 1: Fetch all clients from Zigaflow
-    const clientsResponse = await fetch(
-      `${process.env.ZIGAFLOW_BASE_URL}/v1/clients`,
-      {
-        headers: {
-          'x-api-key': process.env.ZIGAFLOW_API_KEY
-        }
-      }
-    );
+    // Step 1: Fetch ALL clients from Zigaflow (with pagination)
+    let allClients = [];
+    let skip = 0;
+    const top = 100;
+    let hasMore = true;
+    let totalCount = 0;
 
-    if (!clientsResponse.ok) {
-      const errorText = await clientsResponse.text();
-      throw new Error(`Zigaflow API error: ${clientsResponse.status} - ${errorText}`);
+    console.log('📥 Fetching all clients from Zigaflow...');
+
+    while (hasMore) {
+      const clientsResponse = await fetch(
+        `${process.env.ZIGAFLOW_BASE_URL}/v1/clients?skip=${skip}&top=${top}`,
+        {
+          headers: {
+            'x-api-key': process.env.ZIGAFLOW_API_KEY
+          }
+        }
+      );
+
+      if (!clientsResponse.ok) {
+        const errorText = await clientsResponse.text();
+        throw new Error(`Zigaflow API error: ${clientsResponse.status} - ${errorText}`);
+      }
+
+      const clientsData = await clientsResponse.json();
+      const batch = clientsData.data || [];
+      totalCount = clientsData.total_count || 0;
+      
+      allClients = allClients.concat(batch);
+      console.log(`   📄 Page ${Math.floor(skip / top) + 1}: Fetched ${batch.length} clients (Total: ${allClients.length}/${totalCount})`);
+      
+      // If we got fewer than 'top' results, we've reached the end
+      hasMore = batch.length === top;
+      skip += top;
     }
 
-    const clientsData = await clientsResponse.json();
-    const clients = clientsData.data || [];
-    console.log(`📥 Fetched ${clients.length} clients from Zigaflow`);
+    const clients = allClients;
+    console.log(`✅ Fetched ${clients.length} total clients from Zigaflow`);
 
     // Step 2: Get Softr table schema
     const schemaResponse = await fetch(
