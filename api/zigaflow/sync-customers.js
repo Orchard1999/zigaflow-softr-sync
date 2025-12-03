@@ -114,25 +114,8 @@ export default async function handler(req, res) {
       try {
         console.log(`\n🔍 Processing: ${client.name}`);
 
-        // Fetch primary contact for this client
-        let primaryContact = null;
-        try {
-          const contactsResponse = await fetch(
-            `${process.env.ZIGAFLOW_BASE_URL}/v1/contacts?clientId=${client.id}`,
-            {
-              headers: {
-                'x-api-key': process.env.ZIGAFLOW_API_KEY
-              }
-            }
-          );
-
-          if (contactsResponse.ok) {
-            const contacts = await contactsResponse.json();
-            primaryContact = contacts.length > 0 ? contacts[0] : null;
-          }
-        } catch (error) {
-          console.log('   ⚠️ Could not fetch contacts:', error.message);
-        }
+        // Get primary contact from embedded contacts array
+        const primaryContact = client.contacts && client.contacts.length > 0 ? client.contacts[0] : null;
 
         // Fetch addresses for this client
         let primaryAddress = null;
@@ -169,15 +152,21 @@ export default async function handler(req, res) {
           billingAddress = parts.join('\n');
         }
 
-        // Build main contact name
+        // Build main contact name (FIXED: use first_name and last_name)
         let mainContact = '';
         if (primaryContact) {
           const nameParts = [
             primaryContact.title,
-            primaryContact.firstName,
-            primaryContact.lastName
+            primaryContact.first_name,
+            primaryContact.last_name
           ].filter(Boolean);
           mainContact = nameParts.join(' ');
+        }
+
+        // Extract tags values from objects (FIXED: tags are objects with id and value)
+        let tagsString = '';
+        if (Array.isArray(client.tags) && client.tags.length > 0) {
+          tagsString = client.tags.map(tag => tag.value || tag).filter(Boolean).join(', ');
         }
 
         // Map Zigaflow data to Softr fields
@@ -187,9 +176,9 @@ export default async function handler(req, res) {
           [fieldMap['Main Contact']]: mainContact,
           [fieldMap['Billing Address']]: billingAddress,
           [fieldMap['Zigaflow Client ID']]: client.id.toString(),
-          [fieldMap['Price List']]: client.priceList || '',
-          [fieldMap['Account Manager']]: client.accountManager || '',
-          [fieldMap['Tags']]: Array.isArray(client.tags) ? client.tags.join(', ') : (client.tags || ''),
+          [fieldMap['Price List']]: client.price_list || '',  // FIXED: use price_list
+          [fieldMap['Account Manager']]: client.account_manager || '',  // Try account_manager
+          [fieldMap['Tags']]: tagsString,  // FIXED: extract value from tag objects
           [fieldMap['Last Synced']]: new Date().toISOString()
         };
 
