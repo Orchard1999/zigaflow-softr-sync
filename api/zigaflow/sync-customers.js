@@ -40,7 +40,8 @@ export default async function handler(req, res) {
       throw new Error(`Zigaflow API error: ${clientsResponse.status} - ${errorText}`);
     }
 
-    const clients = await clientsResponse.json();
+    const clientsData = await clientsResponse.json();
+    const clients = clientsData.data || [];
     console.log(`📥 Fetched ${clients.length} clients from Zigaflow`);
 
     // Step 2: Get Softr table schema
