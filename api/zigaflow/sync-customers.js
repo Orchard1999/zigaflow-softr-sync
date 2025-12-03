@@ -12,6 +12,12 @@ export default async function handler(req, res) {
   const isVercelCron = req.headers['user-agent']?.includes('vercel-cron');
   const authHeader = req.headers['authorization'];
 
+  // DEBUG LOGGING
+  console.log('🔍 Received authHeader:', authHeader);
+  console.log('🔍 Expected:', `Bearer ${process.env.ADMIN_API_KEY}`);
+  console.log('🔍 ADMIN_API_KEY value:', process.env.ADMIN_API_KEY);
+  console.log('🔍 Match:', authHeader === `Bearer ${process.env.ADMIN_API_KEY}`);
+
   if (!isVercelCron && authHeader !== `Bearer ${process.env.ADMIN_API_KEY}`) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
