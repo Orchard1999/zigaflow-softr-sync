@@ -31,7 +31,7 @@ export default async function handler(req, res) {
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`Softr API error: ${response.status} - ${errorText}`);
+     throw new Error(`Softr API error: ${response.status} - ${errorText}`);
     }
 
     const data = await response.json();
