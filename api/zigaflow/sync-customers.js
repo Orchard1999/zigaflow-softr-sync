@@ -29,8 +29,8 @@ export default async function handler(req, res) {
     const clientsResponse = await fetch(
       `${process.env.ZIGAFLOW_BASE_URL}/v1/clients`,
       {
-        headers: {
-          'Authorization': `Bearer ${process.env.ZIGAFLOW_API_KEY}`,
+    headers: {
+  'x-api-key': process.env.ZIGAFLOW_API_KEY,
           'Content-Type': 'application/json'
         }
       }
@@ -101,7 +101,7 @@ export default async function handler(req, res) {
             `${process.env.ZIGAFLOW_BASE_URL}/v1/contacts?clientId=${client.id}`,
             {
               headers: {
-                'Authorization': `Bearer ${process.env.ZIGAFLOW_API_KEY}`
+  'x-api-key': process.env.ZIGAFLOW_API_KEY,
               }
             }
           );
@@ -121,7 +121,7 @@ export default async function handler(req, res) {
             `${process.env.ZIGAFLOW_BASE_URL}/v1/clients/${client.id}/addresses`,
             {
               headers: {
-                'Authorization': `Bearer ${process.env.ZIGAFLOW_API_KEY}`
+  'x-api-key': process.env.ZIGAFLOW_API_KEY,
               }
             }
           );
