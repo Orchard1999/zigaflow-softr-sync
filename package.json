@@ -1,5 +1,6 @@
 {
   "name": "zigaflow-softr-sync",
+  "type": "module",
   "version": "1.0.0",
   "description": "Sync integration between Zigaflow CRM and Softr database",
   "main": "index.js",
