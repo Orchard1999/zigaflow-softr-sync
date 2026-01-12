@@ -172,6 +172,8 @@ export default async function handler(req, res) {
           [fieldMap['Customer Name']]: client.name || '',
           [fieldMap['Email']]: primaryContact?.email || client.email || '',
           [fieldMap['Main Contact']]: mainContact,
+          [fieldMap['Main Contact ID']]: primaryContact?.id || '',  // ← NEW: Save contact's UUID
+          [fieldMap['Main Contact Email']]: primaryContact?.email || client.email || '',
           [fieldMap['Billing Address']]: billingAddress,
           [fieldMap['Zigaflow Client ID']]: client.id.toString(),
           [fieldMap['Price List']]: client.price_list || '',
