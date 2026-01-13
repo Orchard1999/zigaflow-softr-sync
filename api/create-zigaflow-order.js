@@ -7,8 +7,3 @@ export default function handler(req, res) {
     timestamp: new Date().toISOString()
   });
 }
-```
-
-**Commit this, wait 30 seconds, then test in browser:**
-```
-https://orchard-orders-api.vercel.app/api/create-zigaflow-order
