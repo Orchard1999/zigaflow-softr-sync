@@ -1,5 +1,5 @@
 // /api/create-zigaflow-order.js
-// VERSION 3 - Testing different auth methods
+// VERSION 4 - Correct auth + handle missing contact ID
 
 export default async function handler(req, res) {
   // CORS headers
@@ -13,7 +13,7 @@ export default async function handler(req, res) {
 
   if (req.method === 'GET') {
     return res.status(200).json({ 
-      message: 'Zigaflow Create Order - v3 (auth test)',
+      message: 'Zigaflow Create Order - v4',
       timestamp: new Date().toISOString()
     });
   }
@@ -28,15 +28,13 @@ export default async function handler(req, res) {
   try {
     const body = req.body || {};
     
-    // Build a minimal test payload
+    // Build the job payload
+    // Note: If contact ID is missing, we might need to omit the contact field
+    // or use a default contact
     const jobPayload = {
       client: {
         id: body.zigaflowClientId || '',
         value: body.customerName || ''
-      },
-      contact: {
-        id: body.mainContactId || '',
-        value: body.mainContactName || ''
       },
       reference: 'ORC-O',
       client_reference: body.poNumber || '',
@@ -67,8 +65,16 @@ export default async function handler(req, res) {
       }
     };
 
-    // Try METHOD 1: X-API-Key header (common for many APIs)
-    const response1 = await fetch(`${ZIGAFLOW_BASE_URL}/v1/jobs`, {
+    // Only add contact if we have a contact ID
+    if (body.mainContactId) {
+      jobPayload.contact = {
+        id: body.mainContactId,
+        value: body.mainContactName || ''
+      };
+    }
+
+    // Call Zigaflow with X-API-Key header (the correct auth method!)
+    const response = await fetch(`${ZIGAFLOW_BASE_URL}/v1/jobs`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -76,55 +82,62 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify(jobPayload)
     });
-    const result1Text = await response1.text();
-    let result1;
-    try { result1 = JSON.parse(result1Text); } catch(e) { result1 = result1Text; }
 
-    // Try METHOD 2: api-key header (alternative)
-    const response2 = await fetch(`${ZIGAFLOW_BASE_URL}/v1/jobs`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'api-key': ZIGAFLOW_API_KEY
-      },
-      body: JSON.stringify(jobPayload)
-    });
-    const result2Text = await response2.text();
-    let result2;
-    try { result2 = JSON.parse(result2Text); } catch(e) { result2 = result2Text; }
+    const responseText = await response.text();
+    let result;
+    try { result = JSON.parse(responseText); } catch(e) { result = responseText; }
 
-    // Try METHOD 3: apikey query parameter
-    const response3 = await fetch(`${ZIGAFLOW_BASE_URL}/v1/jobs?apikey=${ZIGAFLOW_API_KEY}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(jobPayload)
-    });
-    const result3Text = await response3.text();
-    let result3;
-    try { result3 = JSON.parse(result3Text); } catch(e) { result3 = result3Text; }
+    // If successful, try to add line items
+    if (response.ok && result.id) {
+      const jobId = result.id;
+      const lineItems = body.lineItems || [];
+      const lineItemResults = [];
 
-    // Try METHOD 4: Bearer token (what we tried before)
-    const response4 = await fetch(`${ZIGAFLOW_BASE_URL}/v1/jobs`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${ZIGAFLOW_API_KEY}`
-      },
-      body: JSON.stringify(jobPayload)
-    });
-    const result4Text = await response4.text();
-    let result4;
-    try { result4 = JSON.parse(result4Text); } catch(e) { result4 = result4Text; }
+      for (const item of lineItems) {
+        const linePayload = {
+          product_code: item.productCode || item.salesCode || '',
+          price: parseFloat(item.price) || 0,
+          quantity: parseInt(item.quantity) || 0,
+          category: item.productRange || ''
+        };
 
-    // Return all results
+        const lineResponse = await fetch(`${ZIGAFLOW_BASE_URL}/v1/jobs/${jobId}/addItem`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-API-Key': ZIGAFLOW_API_KEY
+          },
+          body: JSON.stringify(linePayload)
+        });
+
+        const lineText = await lineResponse.text();
+        let lineResult;
+        try { lineResult = JSON.parse(lineText); } catch(e) { lineResult = lineText; }
+        
+        lineItemResults.push({
+          status: lineResponse.status,
+          ok: lineResponse.ok,
+          sent: linePayload,
+          result: lineResult
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        jobId: result.id,
+        jobNumber: result.job_number || result.reference,
+        zigaflowResponse: result,
+        lineItems: lineItemResults
+      });
+    }
+
+    // Return the response for debugging
     return res.status(200).json({
-      method1_xApiKey: { status: response1.status, result: result1 },
-      method2_apiKey: { status: response2.status, result: result2 },
-      method3_queryParam: { status: response3.status, result: result3 },
-      method4_bearer: { status: response4.status, result: result4 },
-      apiKeyPreview: ZIGAFLOW_API_KEY ? `${ZIGAFLOW_API_KEY.substring(0, 8)}...` : 'NOT SET'
+      success: response.ok,
+      zigaflowStatus: response.status,
+      zigaflowResponse: result,
+      sentPayload: jobPayload,
+      note: !body.mainContactId ? 'Contact ID was missing - omitted from payload' : null
     });
 
   } catch (error) {
