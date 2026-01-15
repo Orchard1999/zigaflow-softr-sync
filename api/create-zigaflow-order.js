@@ -1,5 +1,5 @@
 // /api/create-zigaflow-order.js
-// VERSION 2 - Creates job header only (no line items yet)
+// VERSION 3 - Testing different auth methods
 
 export default async function handler(req, res) {
   // CORS headers
@@ -13,11 +13,7 @@ export default async function handler(req, res) {
 
   if (req.method === 'GET') {
     return res.status(200).json({ 
-      message: 'Zigaflow Create Order - v2 (job header only)',
-      env_check: {
-        has_zigaflow_key: !!process.env.ZIGAFLOW_API_KEY,
-        has_zigaflow_url: !!process.env.ZIGAFLOW_BASE_URL
-      },
+      message: 'Zigaflow Create Order - v3 (auth test)',
       timestamp: new Date().toISOString()
     });
   }
@@ -32,7 +28,7 @@ export default async function handler(req, res) {
   try {
     const body = req.body || {};
     
-    // Build the Zigaflow job payload
+    // Build a minimal test payload
     const jobPayload = {
       client: {
         id: body.zigaflowClientId || '',
@@ -71,8 +67,46 @@ export default async function handler(req, res) {
       }
     };
 
-    // Call Zigaflow API to create job
-    const jobResponse = await fetch(`${ZIGAFLOW_BASE_URL}/v1/jobs`, {
+    // Try METHOD 1: X-API-Key header (common for many APIs)
+    const response1 = await fetch(`${ZIGAFLOW_BASE_URL}/v1/jobs`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': ZIGAFLOW_API_KEY
+      },
+      body: JSON.stringify(jobPayload)
+    });
+    const result1Text = await response1.text();
+    let result1;
+    try { result1 = JSON.parse(result1Text); } catch(e) { result1 = result1Text; }
+
+    // Try METHOD 2: api-key header (alternative)
+    const response2 = await fetch(`${ZIGAFLOW_BASE_URL}/v1/jobs`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'api-key': ZIGAFLOW_API_KEY
+      },
+      body: JSON.stringify(jobPayload)
+    });
+    const result2Text = await response2.text();
+    let result2;
+    try { result2 = JSON.parse(result2Text); } catch(e) { result2 = result2Text; }
+
+    // Try METHOD 3: apikey query parameter
+    const response3 = await fetch(`${ZIGAFLOW_BASE_URL}/v1/jobs?apikey=${ZIGAFLOW_API_KEY}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(jobPayload)
+    });
+    const result3Text = await response3.text();
+    let result3;
+    try { result3 = JSON.parse(result3Text); } catch(e) { result3 = result3Text; }
+
+    // Try METHOD 4: Bearer token (what we tried before)
+    const response4 = await fetch(`${ZIGAFLOW_BASE_URL}/v1/jobs`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -80,35 +114,23 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify(jobPayload)
     });
+    const result4Text = await response4.text();
+    let result4;
+    try { result4 = JSON.parse(result4Text); } catch(e) { result4 = result4Text; }
 
-    // Get response as text first (in case it's not valid JSON)
-    const responseText = await jobResponse.text();
-    
-    let jobResult;
-    try {
-      jobResult = JSON.parse(responseText);
-    } catch (e) {
-      jobResult = { rawResponse: responseText };
-    }
-
-    // Return everything for debugging
+    // Return all results
     return res.status(200).json({
-      success: jobResponse.ok,
-      zigaflowStatus: jobResponse.status,
-      zigaflowResponse: jobResult,
-      sentPayload: jobPayload,
-      receivedFromMake: {
-        customerName: body.customerName,
-        zigaflowClientId: body.zigaflowClientId,
-        lineItemCount: (body.lineItems || []).length
-      }
+      method1_xApiKey: { status: response1.status, result: result1 },
+      method2_apiKey: { status: response2.status, result: result2 },
+      method3_queryParam: { status: response3.status, result: result3 },
+      method4_bearer: { status: response4.status, result: result4 },
+      apiKeyPreview: ZIGAFLOW_API_KEY ? `${ZIGAFLOW_API_KEY.substring(0, 8)}...` : 'NOT SET'
     });
 
   } catch (error) {
     return res.status(500).json({
       success: false,
-      error: error.message,
-      stack: error.stack
+      error: error.message
     });
   }
 }
