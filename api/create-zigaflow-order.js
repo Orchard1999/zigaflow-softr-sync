@@ -1,5 +1,5 @@
 // /api/create-zigaflow-order.js
-// VERSION 5 - Full Excel-style field mapping
+// VERSION 8 - Try product-style payload on addItem endpoint
 
 export default async function handler(req, res) {
   // CORS headers
@@ -13,7 +13,7 @@ export default async function handler(req, res) {
 
   if (req.method === 'GET') {
     return res.status(200).json({ 
-      message: 'Zigaflow Create Order - v5 (full mapping)',
+      message: 'Zigaflow Create Order - v8 (test product-style on addItem)',
       timestamp: new Date().toISOString()
     });
   }
@@ -28,9 +28,10 @@ export default async function handler(req, res) {
   try {
     const body = req.body || {};
     const lineItems = body.lineItems || [];
+    const poNumber = body.poNumber || '';
 
     // ============================================
-    // STEP 1: Calculate Section Names (grouped by product code)
+    // STEP 1: Calculate Section Names
     // ============================================
     const productCodeGroups = {};
     
@@ -51,11 +52,10 @@ export default async function handler(req, res) {
       productCodeGroups[code].totalPrints += parseInt(item.prints) || 0;
     });
 
-    // Convert prints to sheets when prints >= order multiple
+    // Convert prints to sheets
     Object.keys(productCodeGroups).forEach(code => {
       const group = productCodeGroups[code];
       const orderMultiple = group.orderMultiple;
-      
       if (group.totalPrints >= orderMultiple && orderMultiple > 0) {
         const additionalSheets = Math.floor(group.totalPrints / orderMultiple);
         group.totalSheets += additionalSheets;
@@ -63,7 +63,6 @@ export default async function handler(req, res) {
       }
     });
 
-    // Build section names
     const sectionNames = {};
     Object.keys(productCodeGroups).forEach(code => {
       const g = productCodeGroups[code];
@@ -71,60 +70,41 @@ export default async function handler(req, res) {
     });
 
     // ============================================
-    // STEP 2: Build Job Payload (Excel columns A-V, AX-BC)
+    // STEP 2: Create Job
     // ============================================
     const jobPayload = {
-      // Column D: Company
       client: {
         id: body.zigaflowClientId || '',
         value: body.customerName || ''
       },
-      // Contact (if provided)
       ...(body.mainContactId && {
         contact: {
           id: body.mainContactId,
           value: body.mainContactName || ''
         }
       }),
-      // Column A: ID / Reference
       reference: 'ORC-O',
-      // Column O: Client PO
-      client_reference: body.poNumber || '',
-      po_number: body.poNumber || '',
-      // Column B: Pre-Build / Template
+      client_reference: poNumber,
+      po_number: poNumber,
       template_name: 'Job Upload Template',
-      // Column K: End Date
       estimated_delivery: body.requiredDeliveryDate 
         ? new Date(body.requiredDeliveryDate).toISOString() 
         : null,
-      // Column J: Start Date
       estimated_start: body.orderDate 
         ? new Date(body.orderDate).toISOString() 
         : new Date().toISOString(),
-      // Customer message
       description: body.customerMessage || '',
-      // Custom fields (Columns S-V for aggregations, AX-BB for shipping)
       custom_fields: [
-        // Column S: Custom[Gloss4.8mm]
         { label: 'Gloss4.8mm', value: String(body.aggregations?.gloss4mm || 0) },
-        // Column T: Custom[Gloss3m]
         { label: 'Gloss3m', value: String(body.aggregations?.gloss3mm || 0) },
-        // Column U: Custom[Matt4mm]
         { label: 'Matt4mm', value: String(body.aggregations?.matt4mm || 0) },
-        // Column V: Custom[Matt3mm]
         { label: 'Matt3mm', value: String(body.aggregations?.matt3mm || 0) },
-        // Column AX: Custom[ShiptoContactName]
         { label: 'ShiptoContactName', value: body.deliveryDetails?.contactName || '' },
-        // Column AY: Custom[ShiptoCompanyName]
         { label: 'ShiptoCompanyName', value: body.deliveryDetails?.companyName || '' },
-        // Column AZ: Custom[ShiptoAddress]
         { label: 'ShiptoAddress', value: body.deliveryDetails?.address || '' },
-        // Column BA: Custom[ShiptoNumber]
         { label: 'ShiptoNumber', value: String(body.deliveryDetails?.number || '') },
-        // Column BB: Custom[ShiptoEmail]
         { label: 'ShiptoEmail', value: body.deliveryDetails?.email || '' }
       ],
-      // Delivery address
       one_off_delivery_address: {
         address1: body.deliveryDetails?.companyName || '',
         address2: body.deliveryDetails?.address || '',
@@ -132,9 +112,6 @@ export default async function handler(req, res) {
       }
     };
 
-    // ============================================
-    // STEP 3: Create Job in Zigaflow
-    // ============================================
     const jobResponse = await fetch(`${ZIGAFLOW_BASE_URL}/v1/jobs`, {
       method: 'POST',
       headers: {
@@ -151,111 +128,92 @@ export default async function handler(req, res) {
     if (!jobResponse.ok) {
       return res.status(200).json({
         success: false,
-        error: 'Failed to create job',
+        step: 'CREATE_JOB',
         zigaflowStatus: jobResponse.status,
-        zigaflowResponse: jobResult,
-        sentPayload: jobPayload
+        zigaflowResponse: jobResult
       });
     }
 
     const jobId = jobResult.id;
-    const jobNumber = jobResult.number || jobResult.job_number;
+    const jobNumber = jobResult.number;
 
     // ============================================
-    // STEP 4: Add Line Items with Full Mapping (Excel columns W-AV)
+    // STEP 3: Try Adding Line Items with FULL Product-Style Payload
     // ============================================
-    const lineItemResults = [];
+    const results = [];
 
     for (let i = 0; i < lineItems.length; i++) {
       const item = lineItems[i];
-      const isFirstRow = i === 0;
-
-      // Column W: Section Name
+      
       const sectionName = sectionNames[item.productCode] || '';
-
-      // Column Z: Detailed Description
-      // Format: "SIZE, FINISH, THICKNESS, BACKING - DESIGN"
       const detailedDescription = `${item.size || ''}, ${item.finish || ''}, ${item.thickness || ''}, ${item.backing || ''} - ${item.design || ''}`;
 
-      // Column AC: Sales Account Code
-      const salesAccountCode = item.salesCode ? `${item.salesCode} - Melamine Sales` : '';
-
-      // Build line item payload with ALL fields
-      const linePayload = {
-        // Column X: Item Code
+      // TRY: Full product-style payload on addItem
+      const fullPayload = {
         product_code: item.productCode || '',
-        // Column Y: Item Description (Design)
         description: item.design || '',
-        // Column AQ: Qty
         quantity: parseInt(item.quantity) || 0,
-        // Column AA: Category
-        category: item.productRange || '',
-        // Price
         price: parseFloat(item.price) || 0,
-        // Column W: Section Name
-        section_name: sectionName,
-        // Column Z: Detailed Description
-        detailed_description: detailedDescription,
-        // Column AB: Unit
-        unit: 1,
-        // Column AC: Sales Account Code
-        sales_account_code: salesAccountCode,
-        // Column AJ: Sales Tax Code
-        sales_tax_code: '20% (VAT on Income)',
-        // Column AR: Item Custom[Sheets]
-        sheets: parseInt(item.sheets) || 0,
-        // Column AS: Item Custom[Prints]
-        prints: parseInt(item.prints) || 0,
-        // Column AT: Item Custom[WoodgrainType]
-        woodgrain_type: item.woodgrainType || '',
-        // Column AU: Item Custom[WoodgrainSheets]
-        woodgrain_sheets: parseInt(item.woodgrainSheets) || 0,
-        // Column AV: Item Custom[WoodgrainPrints]
-        woodgrain_prints: parseInt(item.woodgrainPrints) || 0
+        unit_price: parseFloat(item.price) || 0,
+        category: item.productRange || '',
+        custom_fields: [
+          { label: 'SectionName', value: sectionName },
+          { label: 'DetailedDescription', value: detailedDescription },
+          { label: 'Size', value: item.size || '' },
+          { label: 'Thickness', value: item.thickness || '' },
+          { label: 'Finish', value: item.finish || '' },
+          { label: 'Backing', value: item.backing || '' },
+          { label: 'Sheets', value: String(item.sheets || 0) },
+          { label: 'Prints', value: String(item.prints || 0) },
+          { label: 'WoodgrainType', value: item.woodgrainType || '' },
+          { label: 'WoodgrainSheets', value: String(item.woodgrainSheets || 0) },
+          { label: 'WoodgrainPrints', value: String(item.woodgrainPrints || 0) }
+        ],
+        sales_account_code: item.salesCode || '',
+        sales_tax_code: '20% (VAT on Income)'
       };
 
-      // Try to add the line item
-      const lineResponse = await fetch(`${ZIGAFLOW_BASE_URL}/v1/jobs/${jobId}/addItem`, {
+      const addResponse = await fetch(`${ZIGAFLOW_BASE_URL}/v1/jobs/${jobId}/addItem`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'X-API-Key': ZIGAFLOW_API_KEY
         },
-        body: JSON.stringify(linePayload)
+        body: JSON.stringify(fullPayload)
       });
 
-      const lineText = await lineResponse.text();
-      let lineResult;
-      try { lineResult = JSON.parse(lineText); } catch(e) { lineResult = lineText; }
+      const addText = await addResponse.text();
+      let addResult;
+      try { addResult = JSON.parse(addText); } catch(e) { addResult = addText; }
 
-      lineItemResults.push({
+      results.push({
         index: i + 1,
-        status: lineResponse.status,
-        ok: lineResponse.ok,
-        sent: linePayload,
-        result: lineResult
+        design: item.design,
+        productCode: item.productCode,
+        payloadSent: fullPayload,
+        response: {
+          status: addResponse.status,
+          ok: addResponse.ok,
+          result: addResult
+        }
       });
     }
 
     // ============================================
-    // STEP 5: Return Results
+    // STEP 4: Return Results
     // ============================================
     return res.status(200).json({
       success: true,
       jobId: jobId,
       jobNumber: jobNumber,
-      zigaflowResponse: jobResult,
-      lineItemsProcessed: lineItemResults.length,
-      lineItemsSuccessful: lineItemResults.filter(r => r.ok).length,
-      lineItems: lineItemResults,
-      sectionNames: sectionNames
+      lineItemResults: results,
+      message: 'Check lineItemResults to see if extra fields were accepted'
     });
 
   } catch (error) {
     return res.status(500).json({
       success: false,
-      error: error.message,
-      stack: error.stack
+      error: error.message
     });
   }
 }
