@@ -12,12 +12,6 @@ export default async function handler(req, res) {
   const isVercelCron = req.headers['user-agent']?.includes('vercel-cron');
   const authHeader = req.headers['authorization'];
 
-  // DEBUG LOGGING
-  console.log('🔍 Received authHeader:', authHeader);
-  console.log('🔍 Expected:', `Bearer ${process.env.ADMIN_API_KEY}`);
-  console.log('🔍 ADMIN_API_KEY value:', process.env.ADMIN_API_KEY);
-  console.log('🔍 Match:', authHeader === `Bearer ${process.env.ADMIN_API_KEY}`);
-
   if (!isVercelCron && authHeader !== `Bearer ${process.env.ADMIN_API_KEY}`) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
@@ -56,13 +50,37 @@ export default async function handler(req, res) {
       allClients = allClients.concat(batch);
       console.log(`   📄 Page ${Math.floor(skip / top) + 1}: Fetched ${batch.length} clients (Total: ${allClients.length}/${totalCount})`);
       
-      // If we got fewer than 'top' results, we've reached the end
       hasMore = batch.length === top;
       skip += top;
     }
 
-    const clients = allClients;
-    console.log(`✅ Fetched ${clients.length} total clients from Zigaflow`);
+    console.log(`✅ Fetched ${allClients.length} total clients from Zigaflow`);
+
+    // ✅ NEW: Filter to only sync customers with "Softr" tag
+    const clients = allClients.filter(client => {
+      if (!Array.isArray(client.tags)) return false;
+      return client.tags.some(tag => {
+        const tagValue = tag.value || tag;
+        return tagValue === 'Softr';
+      });
+    });
+
+    console.log(`🏷️  Filtered to ${clients.length} clients with "Softr" tag`);
+
+    if (clients.length === 0) {
+      console.log('⚠️  No clients with "Softr" tag found. Nothing to sync.');
+      return res.status(200).json({
+        success: true,
+        summary: {
+          total: allClients.length,
+          filtered: 0,
+          created: 0,
+          updated: 0,
+          errors: 0
+        },
+        message: 'No clients with "Softr" tag found'
+      });
+    }
 
     // Step 2: Get Softr table schema
     const schemaResponse = await fetch(
@@ -120,10 +138,8 @@ export default async function handler(req, res) {
         // Get primary address from embedded addresses array OR use client's direct address fields
         let primaryAddress = null;
         if (client.addresses && client.addresses.length > 0) {
-          // Use first address from addresses array
           primaryAddress = client.addresses[0];
         } else {
-          // Use client's direct address fields as fallback
           primaryAddress = {
             address1: client.address1,
             address2: client.address2,
@@ -172,7 +188,7 @@ export default async function handler(req, res) {
           [fieldMap['Customer Name']]: client.name || '',
           [fieldMap['Email']]: primaryContact?.email || client.email || '',
           [fieldMap['Main Contact']]: mainContact,
-          [fieldMap['Main Contact ID']]: primaryContact?.id || '',  // ← NEW: Save contact's UUID
+          [fieldMap['Main Contact ID']]: primaryContact?.id || '',
           [fieldMap['Main Contact Email']]: primaryContact?.email || client.email || '',
           [fieldMap['Billing Address']]: billingAddress,
           [fieldMap['Zigaflow Client ID']]: client.id.toString(),
@@ -239,6 +255,8 @@ export default async function handler(req, res) {
 
     console.log('\n═══════════════════════════════════════');
     console.log('✅ SYNC COMPLETE');
+    console.log(`   Total Zigaflow clients: ${allClients.length}`);
+    console.log(`   With "Softr" tag: ${clients.length}`);
     console.log(`   Created: ${createdCount}`);
     console.log(`   Updated: ${updatedCount}`);
     console.log(`   Errors: ${errorCount}`);
@@ -247,7 +265,8 @@ export default async function handler(req, res) {
     return res.status(200).json({
       success: true,
       summary: {
-        total: clients.length,
+        totalInZigaflow: allClients.length,
+        filteredWithSoftrTag: clients.length,
         created: createdCount,
         updated: updatedCount,
         errors: errorCount
