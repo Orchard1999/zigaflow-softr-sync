@@ -29,9 +29,10 @@ export default async function handler(req, res) {
         console.log('Fetching price lists from Zigaflow...');
         
         const zigaflowResponse = await fetch('https://api.zigaflow.com/v1/pricelist', {
+            method: 'GET',
             headers: {
-                'Authorization': `Bearer ${ZIGAFLOW_API_KEY}`,
-                'Content-Type': 'application/json'
+                'Accept': 'application/json',
+                'x-api-key': ZIGAFLOW_API_KEY
             }
         });
 
