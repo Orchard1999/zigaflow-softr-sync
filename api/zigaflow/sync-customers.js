@@ -135,21 +135,16 @@ export default async function handler(req, res) {
         // Get primary contact from embedded contacts array
         const primaryContact = client.contacts && client.contacts.length > 0 ? client.contacts[0] : null;
 
-        // Get primary address from embedded addresses array OR use client's direct address fields
-        let primaryAddress = null;
-        if (client.addresses && client.addresses.length > 0) {
-          primaryAddress = client.addresses[0];
-        } else {
-          primaryAddress = {
-            address1: client.address1,
-            address2: client.address2,
-            address3: client.address3,
-            town: client.town,
-            county: client.county,
-            postcode: client.postcode,
-            country: client.country
-          };
-        }
+        // Always use client's direct address fields (not addresses array)
+        const primaryAddress = {
+          address1: client.address1,
+          address2: client.address2,
+          address3: client.address3,
+          town: client.town,
+          county: client.county,
+          postcode: client.postcode,
+          country: client.country
+        };
 
         // Build billing address string
         let billingAddress = '';
@@ -192,8 +187,8 @@ export default async function handler(req, res) {
           [fieldMap['Main Contact Email']]: primaryContact?.email || client.email || '',
           [fieldMap['Billing Address']]: billingAddress,
           [fieldMap['Zigaflow Client ID']]: client.id.toString(),
-          [fieldMap['Price List']]: client.price_list || '',
-          [fieldMap['Account Manager']]: client.account_manager || '',
+          [fieldMap['Price List']]: client.price_list?.id || client.price_list || '',
+          [fieldMap['Account Manager']]: client.account_manager?.value || '',
           [fieldMap['Tags']]: tagsString,
           [fieldMap['Last Synced']]: new Date().toISOString()
         };
