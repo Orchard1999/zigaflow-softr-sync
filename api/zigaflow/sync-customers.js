@@ -187,8 +187,10 @@ export default async function handler(req, res) {
           [fieldMap['Main Contact Email']]: primaryContact?.email || client.email || '',
           [fieldMap['Billing Address']]: billingAddress,
           [fieldMap['Zigaflow Client ID']]: client.id.toString(),
-          [fieldMap['Price List']]: client.price_list?.id || client.price_list || '',
+          [fieldMap['Price List']]: client.price_list?.id || '',
+          [fieldMap['Price List Name']]: client.price_list?.value || '',
           [fieldMap['Account Manager']]: client.account_manager?.value || '',
+          [fieldMap['Account Manager ID']]: client.account_manager?.id || '',
           [fieldMap['Tags']]: tagsString,
           [fieldMap['Last Synced']]: new Date().toISOString()
         };
