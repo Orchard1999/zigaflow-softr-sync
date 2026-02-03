@@ -85,7 +85,11 @@ export default async function handler(req, res) {
 
     const jobResponseText = await jobResponse.text();
     let jobResult;
-    try { jobResult = JSON.parse(jobResponseText); } catch(e) { jobResult = jobResponseText; }
+    try { 
+      jobResult = JSON.parse(jobResponseText); 
+    } catch(e) { 
+      jobResult = jobResponseText; 
+    }
 
     if (!jobResponse.ok) {
       return res.status(200).json({
@@ -103,7 +107,7 @@ export default async function handler(req, res) {
     // STEP 2: Create Sections
     // ============================================
     const sectionResults = [];
-    const sectionIdMap = {}; // Map section name to section ID
+    const sectionIdMap = {};
 
     for (let i = 0; i < sections.length; i++) {
       const section = sections[i];
@@ -124,9 +128,12 @@ export default async function handler(req, res) {
 
       const sectionText = await sectionResponse.text();
       let sectionResult;
-      try { sectionResult = JSON.parse(sectionText); } catch(e) { sectionResult = sectionText; }
+      try { 
+        sectionResult = JSON.parse(sectionText); 
+      } catch(e) { 
+        sectionResult = sectionText; 
+      }
 
-      // Store section ID for later use
       if (sectionResponse.ok && sectionResult.id) {
         sectionIdMap[section.name] = sectionResult.id;
       }
@@ -150,7 +157,6 @@ export default async function handler(req, res) {
     for (let i = 0; i < lineItems.length; i++) {
       const item = lineItems[i];
       
-      // Get section ID for this item
       const sectionId = sectionIdMap[item.sectionName] || null;
 
       const itemPayload = {
@@ -162,7 +168,6 @@ export default async function handler(req, res) {
         category: item.productRange || '',
         sales_account_code: item.salesCode || '',
         sales_tax_code: '20% (VAT on Income)',
-        // Add section ID if available
         ...(sectionId && { section_id: sectionId }),
         custom_fields: [
           { label: 'SectionName', value: item.sectionName || '' },
@@ -192,7 +197,11 @@ export default async function handler(req, res) {
 
       const addText = await addResponse.text();
       let addResult;
-      try { addResult = JSON.parse(addText); } catch(e) { addResult = addText; }
+      try { 
+        addResult = JSON.parse(addText); 
+      } catch(e) { 
+        addResult = addText; 
+      }
 
       itemResults.push({
         index: i + 1,
@@ -223,6 +232,7 @@ export default async function handler(req, res) {
     });
 
   } catch (error) {
+    console.error('Full error:', error);
     return res.status(500).json({
       success: false,
       error: error.message,
@@ -230,23 +240,3 @@ export default async function handler(req, res) {
     });
   }
 }
-```
-
----
-
-## **Key Changes:**
-
-1. **Added Step 2: Create Sections** - Loops through `sections` array and calls `/addSection` for each
-2. **Section ID mapping** - Stores the returned section ID for each section name
-3. **Line items linked to sections** - Adds `section_id` to each item payload if available
-4. **Added JigId and BackJigId** to item custom fields
-5. **Better response** - Returns section results and item results separately
-
----
-
-## **Flow:**
-```
-1. Create Job → get jobId
-2. Create Sections → get section IDs, map to section names
-3. Add Items → include section_id to link items to sections
-4. Return results
