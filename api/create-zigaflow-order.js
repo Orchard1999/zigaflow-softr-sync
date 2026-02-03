@@ -1,219 +1,123 @@
-// /api/create-zigaflow-order.js
-// VERSION 8 - Try product-style payload on addItem endpoint
+const lineItems = input.lineItems || [];
+const trigger = input.trigger || {};
+const lookup2 = input.lookup2 || {};
+const agg = input.aggregations || {};
 
-export default async function handler(req, res) {
-  // CORS headers
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+// ============ STEP 1: Calculate Section Names ============
+const productCodeGroups = {};
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-
-  if (req.method === 'GET') {
-    return res.status(200).json({ 
-      message: 'Zigaflow Create Order - v8 (test product-style on addItem)',
-      timestamp: new Date().toISOString()
-    });
-  }
-
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
-
-  const ZIGAFLOW_API_KEY = process.env.ZIGAFLOW_API_KEY;
-  const ZIGAFLOW_BASE_URL = process.env.ZIGAFLOW_BASE_URL;
-
-  try {
-    const body = req.body || {};
-    const lineItems = body.lineItems || [];
-    const poNumber = body.poNumber || '';
-
-    // ============================================
-    // STEP 1: Calculate Section Names
-    // ============================================
-    const productCodeGroups = {};
-    
-    lineItems.forEach(item => {
-      const code = item.productCode || '';
-      if (!productCodeGroups[code]) {
-        productCodeGroups[code] = {
-          productRange: item.productRange || '',
-          finish: item.finish || '',
-          backing: item.backing || '',
-          size: item.size || '',
-          totalSheets: 0,
-          totalPrints: 0,
-          orderMultiple: parseInt(item.orderMultiple) || 1
-        };
-      }
-      productCodeGroups[code].totalSheets += parseInt(item.sheets) || 0;
-      productCodeGroups[code].totalPrints += parseInt(item.prints) || 0;
-    });
-
-    // Convert prints to sheets
-    Object.keys(productCodeGroups).forEach(code => {
-      const group = productCodeGroups[code];
-      const orderMultiple = group.orderMultiple;
-      if (group.totalPrints >= orderMultiple && orderMultiple > 0) {
-        const additionalSheets = Math.floor(group.totalPrints / orderMultiple);
-        group.totalSheets += additionalSheets;
-        group.totalPrints = group.totalPrints % orderMultiple;
-      }
-    });
-
-    const sectionNames = {};
-    Object.keys(productCodeGroups).forEach(code => {
-      const g = productCodeGroups[code];
-      sectionNames[code] = `${g.productRange} - ${g.finish} - ${g.backing} - ${g.size} - Total Sheets (${g.totalSheets}), Total Prints (${g.totalPrints})`;
-    });
-
-    // ============================================
-    // STEP 2: Create Job
-    // ============================================
-    const jobPayload = {
-      client: {
-        id: body.zigaflowClientId || '',
-        value: body.customerName || ''
-      },
-      ...(body.mainContactId && {
-        contact: {
-          id: body.mainContactId,
-          value: body.mainContactName || ''
-        }
-      }),
-      reference: 'ORC-O',
-      client_reference: poNumber,
-      po_number: poNumber,
-      template_name: 'Job Upload Template',
-      estimated_delivery: body.requiredDeliveryDate 
-        ? new Date(body.requiredDeliveryDate).toISOString() 
-        : null,
-      estimated_start: body.orderDate 
-        ? new Date(body.orderDate).toISOString() 
-        : new Date().toISOString(),
-      description: body.customerMessage || '',
-      custom_fields: [
-        { label: 'Gloss4.8mm', value: String(body.aggregations?.gloss4mm || 0) },
-        { label: 'Gloss3m', value: String(body.aggregations?.gloss3mm || 0) },
-        { label: 'Matt4mm', value: String(body.aggregations?.matt4mm || 0) },
-        { label: 'Matt3mm', value: String(body.aggregations?.matt3mm || 0) },
-        { label: 'ShiptoContactName', value: body.deliveryDetails?.contactName || '' },
-        { label: 'ShiptoCompanyName', value: body.deliveryDetails?.companyName || '' },
-        { label: 'ShiptoAddress', value: body.deliveryDetails?.address || '' },
-        { label: 'ShiptoNumber', value: String(body.deliveryDetails?.number || '') },
-        { label: 'ShiptoEmail', value: body.deliveryDetails?.email || '' }
-      ],
-      one_off_delivery_address: {
-        address1: body.deliveryDetails?.companyName || '',
-        address2: body.deliveryDetails?.address || '',
-        postcode: ''
-      }
+lineItems.forEach(item => {
+  const code = item.productCode || '';
+  if (!productCodeGroups[code]) {
+    productCodeGroups[code] = {
+      productRange: item.productRange || '',
+      finish: item.finish || '',
+      thickness: item.thickness || '',
+      backing: item.backing || '',
+      size: item.size || '',
+      totalSheets: 0,
+      totalPrints: 0,
+      orderMultiple: parseInt(item.orderMultiple) || 1
     };
-
-    const jobResponse = await fetch(`${ZIGAFLOW_BASE_URL}/v1/jobs`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-API-Key': ZIGAFLOW_API_KEY
-      },
-      body: JSON.stringify(jobPayload)
-    });
-
-    const jobResponseText = await jobResponse.text();
-    let jobResult;
-    try { jobResult = JSON.parse(jobResponseText); } catch(e) { jobResult = jobResponseText; }
-
-    if (!jobResponse.ok) {
-      return res.status(200).json({
-        success: false,
-        step: 'CREATE_JOB',
-        zigaflowStatus: jobResponse.status,
-        zigaflowResponse: jobResult
-      });
-    }
-
-    const jobId = jobResult.id;
-    const jobNumber = jobResult.number;
-
-    // ============================================
-    // STEP 3: Try Adding Line Items with FULL Product-Style Payload
-    // ============================================
-    const results = [];
-
-    for (let i = 0; i < lineItems.length; i++) {
-      const item = lineItems[i];
-      
-      const sectionName = sectionNames[item.productCode] || '';
-      const detailedDescription = `${item.size || ''}, ${item.finish || ''}, ${item.thickness || ''}, ${item.backing || ''} - ${item.design || ''}`;
-
-      // TRY: Full product-style payload on addItem
-      const fullPayload = {
-        product_code: item.productCode || '',
-        description: item.design || '',
-        quantity: parseInt(item.quantity) || 0,
-        price: parseFloat(item.price) || 0,
-        unit_price: parseFloat(item.price) || 0,
-        category: item.productRange || '',
-        custom_fields: [
-          { label: 'SectionName', value: sectionName },
-          { label: 'DetailedDescription', value: detailedDescription },
-          { label: 'Size', value: item.size || '' },
-          { label: 'Thickness', value: item.thickness || '' },
-          { label: 'Finish', value: item.finish || '' },
-          { label: 'Backing', value: item.backing || '' },
-          { label: 'Sheets', value: String(item.sheets || 0) },
-          { label: 'Prints', value: String(item.prints || 0) },
-          { label: 'WoodgrainType', value: item.woodgrainType || '' },
-          { label: 'WoodgrainSheets', value: String(item.woodgrainSheets || 0) },
-          { label: 'WoodgrainPrints', value: String(item.woodgrainPrints || 0) }
-        ],
-        sales_account_code: item.salesCode || '',
-        sales_tax_code: '20% (VAT on Income)'
-      };
-
-      const addResponse = await fetch(`${ZIGAFLOW_BASE_URL}/v1/jobs/${jobId}/addItem`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-API-Key': ZIGAFLOW_API_KEY
-        },
-        body: JSON.stringify(fullPayload)
-      });
-
-      const addText = await addResponse.text();
-      let addResult;
-      try { addResult = JSON.parse(addText); } catch(e) { addResult = addText; }
-
-      results.push({
-        index: i + 1,
-        design: item.design,
-        productCode: item.productCode,
-        payloadSent: fullPayload,
-        response: {
-          status: addResponse.status,
-          ok: addResponse.ok,
-          result: addResult
-        }
-      });
-    }
-
-    // ============================================
-    // STEP 4: Return Results
-    // ============================================
-    return res.status(200).json({
-      success: true,
-      jobId: jobId,
-      jobNumber: jobNumber,
-      lineItemResults: results,
-      message: 'Check lineItemResults to see if extra fields were accepted'
-    });
-
-  } catch (error) {
-    return res.status(500).json({
-      success: false,
-      error: error.message
-    });
   }
-}
+  productCodeGroups[code].totalSheets += parseInt(item.sheets) || 0;
+  productCodeGroups[code].totalPrints += parseInt(item.prints) || 0;
+});
+
+// Convert prints to sheets when >= orderMultiple
+Object.keys(productCodeGroups).forEach(code => {
+  const group = productCodeGroups[code];
+  const orderMultiple = group.orderMultiple;
+  if (group.totalPrints >= orderMultiple && orderMultiple > 0) {
+    const additionalSheets = Math.floor(group.totalPrints / orderMultiple);
+    group.totalSheets += additionalSheets;
+    group.totalPrints = group.totalPrints % orderMultiple;
+  }
+});
+
+// Build section names
+const sectionNames = {};
+Object.keys(productCodeGroups).forEach(code => {
+  const g = productCodeGroups[code];
+  sectionNames[code] = `${g.productRange} - ${g.finish} - ${g.thickness} - ${g.backing} - ${g.size} - Total Sheets (${g.totalSheets}), Total Prints (${g.totalPrints})`;
+});
+
+// Get unique sections for creation
+const uniqueSections = [...new Set(Object.values(sectionNames))];
+
+// ============ STEP 2: Build Payload ============
+const payload = {
+  customerName: lookup2['Customer Name'] || '',
+  zigaflowClientId: lookup2['Zigaflow Client ID'] || '',
+  mainContactName: lookup2['Main Contact'] || '',
+  mainContactId: lookup2['Main Contact ID'] || '',
+  mainContactEmail: lookup2['Main Contact Email'] || '',
+  poNumber: trigger['PO Number'] || '',
+  priceList: lookup2['Price List'] || '',
+  orderDate: trigger['Order Date'] || new Date().toISOString().split('T')[0],
+  requiredDeliveryDate: trigger['Required Delivery Date'] || '',
+  customerMessage: trigger['Customer Message'] || '',
+  assignedUserEmail: lookup2['Assigned User Email'] || '',
+  initialAssignedUserEmail: lookup2['Initial Assigned User Email'] || '',
+  
+  aggregations: {
+    gloss3mm: parseInt(agg.gloss3mm) || 0,
+    gloss4mm: parseInt(agg.gloss4mm) || 0,
+    matt3mm: parseInt(agg.matt3mm) || 0,
+    matt4mm: parseInt(agg.matt4mm) || 0
+  },
+  
+  deliveryDetails: {
+    contactName: trigger['Ship Contact'] || '',
+    companyName: trigger['Ship Company'] || '',
+    address: trigger['Ship Address'] || '',
+    number: String(trigger['Ship Number'] || ''),
+    email: trigger['Ship Email'] || ''
+  },
+  
+  // Sections to create
+  sections: uniqueSections.map(name => ({
+    name: name,
+    style_name: 'Default'
+  })),
+  
+  // Line items with section assignment
+  lineItems: lineItems.map(item => {
+    const sectionName = sectionNames[item.productCode] || '';
+    const detailedDescription = `${item.size || ''}, ${item.finish || ''}, ${item.thickness || ''}, ${item.backing || ''} - ${item.design || ''}`;
+    
+    // Woodgrain type formatting
+    const woodgrainValue = item.bespokeBacking 
+      ? `Bespoke Woodgrain - ${item.bespokeBacking}` 
+      : (item.woodgrainType || '');
+    
+    return {
+      productCode: item.productCode || '',
+      productRange: item.productRange || '',
+      design: item.design || '',
+      size: item.size || '',
+      thickness: item.thickness || '',
+      backing: item.backing || '',
+      bespokeBacking: item.bespokeBacking || '',
+      finish: item.finish || '',
+      quantity: parseInt(item.quantity) || 0,
+      sheets: parseInt(item.sheets) || 0,
+      prints: parseInt(item.prints) || 0,
+      woodgrainType: woodgrainValue,
+      woodgrainSheets: parseInt(item.woodgrainSheets) || 0,
+      woodgrainPrints: parseInt(item.woodgrainPrints) || 0,
+      orderMultiple: parseInt(item.orderMultiple) || 1,
+      salesCode: item.salesCode || '',
+      jigId: item.jigId || '',
+      backJigId: item.backJigId || '',
+      sectionName: sectionName,
+      detailedDescription: detailedDescription,
+      price: parseFloat(item.price) || 0,
+      lineTotal: parseFloat(item.lineTotal) || 0
+    };
+  })
+};
+
+console.log('Built Zigaflow payload with', payload.lineItems.length, 'line items and', payload.sections.length, 'sections');
+
+return JSON.stringify(payload);
