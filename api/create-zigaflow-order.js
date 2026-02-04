@@ -178,7 +178,7 @@ export default async function handler(req, res) {
           { label: 'WoodgrainType', value: item.woodgrainType || '' },
           { label: 'WoodgrainSheets', value: String(item.woodgrainSheets || 0) },
           { label: 'WoodgrainPrints', value: String(item.woodgrainPrints || 0) },
-          { label: 'DetailedDescriptionD', value: String(item.detailedDescription || '' }
+          { label: 'DetailedDescriptionD', value: item.detailedDescription || '' }
         ]
       };
 
