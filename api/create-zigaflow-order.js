@@ -164,7 +164,6 @@ export default async function handler(req, res) {
       const itemPayload = {
         product_code: item.productCode || '',
         description: item.design || '',
-        detailed_description: item.detailedDescription || '',
         quantity: parseInt(item.quantity) || 0,
         price: parseFloat(item.price) || 0,
         unit_price: parseFloat(item.price) || 0,
