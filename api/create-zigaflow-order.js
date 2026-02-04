@@ -164,6 +164,7 @@ export default async function handler(req, res) {
       const itemPayload = {
         product_code: item.productCode || '',
         description: item.design || '',
+        detailed_description: item.detailedDescription || '',
         quantity: parseInt(item.quantity) || 0,
         price: parseFloat(item.price) || 0,
         unit_price: parseFloat(item.price) || 0,
@@ -172,19 +173,12 @@ export default async function handler(req, res) {
         sales_tax_code: '20% (VAT on Income)',
         ...(sectionId && { section_id: sectionId }),
         custom_fields: [
-          { label: 'SectionName', value: item.sectionName || '' },
-          { label: 'DetailedDescription', value: item.detailedDescription || '' },
-          { label: 'Size', value: item.size || '' },
-          { label: 'Thickness', value: item.thickness || '' },
-          { label: 'Finish', value: item.finish || '' },
-          { label: 'Backing', value: item.backing || '' },
+         
           { label: 'Sheets', value: String(item.sheets || 0) },
           { label: 'Prints', value: String(item.prints || 0) },
           { label: 'WoodgrainType', value: item.woodgrainType || '' },
           { label: 'WoodgrainSheets', value: String(item.woodgrainSheets || 0) },
-          { label: 'WoodgrainPrints', value: String(item.woodgrainPrints || 0) },
-          { label: 'JigId', value: item.jigId || '' },
-          { label: 'BackJigId', value: item.backJigId || '' }
+          { label: 'WoodgrainPrints', value: String(item.woodgrainPrints || 0) }
         ]
       };
 
