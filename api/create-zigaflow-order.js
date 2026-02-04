@@ -1,5 +1,5 @@
 // /api/create-zigaflow-order.js
-// VERSION 10 - Fixed custom field labels
+// VERSION 12 - Parallel API calls for speed
 
 export default async function handler(req, res) {
   // CORS headers
@@ -13,7 +13,7 @@ export default async function handler(req, res) {
 
   if (req.method === 'GET') {
     return res.status(200).json({ 
-      message: 'Zigaflow Create Order - v10 (fixed custom field labels)',
+      message: 'Zigaflow Create Order - v12 (parallel API calls)',
       timestamp: new Date().toISOString()
     });
   }
@@ -105,60 +105,72 @@ export default async function handler(req, res) {
     const jobNumber = jobResult.number;
 
     // ============================================
-    // STEP 2: Create Sections
+    // STEP 2: Create Sections (PARALLEL)
     // ============================================
-    const sectionResults = [];
-    const sectionIdMap = {};
-
-    for (let i = 0; i < sections.length; i++) {
-      const section = sections[i];
-      
+    const sectionPromises = sections.map(async (section, i) => {
       const sectionPayload = {
         name: section.name || '',
         style_name: section.style_name || 'Products'
       };
 
-      const sectionResponse = await fetch(`${ZIGAFLOW_BASE_URL}/v1/jobs/${jobId}/addSection`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-API-Key': ZIGAFLOW_API_KEY
-        },
-        body: JSON.stringify(sectionPayload)
-      });
+      try {
+        const sectionResponse = await fetch(`${ZIGAFLOW_BASE_URL}/v1/jobs/${jobId}/addSection`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-API-Key': ZIGAFLOW_API_KEY
+          },
+          body: JSON.stringify(sectionPayload)
+        });
 
-      const sectionText = await sectionResponse.text();
-      let sectionResult;
-      try { 
-        sectionResult = JSON.parse(sectionText); 
-      } catch(e) { 
-        sectionResult = sectionText; 
-      }
-
-      if (sectionResponse.ok && sectionResult.id) {
-        sectionIdMap[section.name] = sectionResult.id;
-      }
-
-      sectionResults.push({
-        index: i + 1,
-        name: section.name,
-        style: section.style_name,
-        response: {
-          status: sectionResponse.status,
-          ok: sectionResponse.ok,
-          result: sectionResult
+        const sectionText = await sectionResponse.text();
+        let sectionResult;
+        try { 
+          sectionResult = JSON.parse(sectionText); 
+        } catch(e) { 
+          sectionResult = sectionText; 
         }
-      });
-    }
+
+        return {
+          index: i + 1,
+          name: section.name,
+          style: section.style_name,
+          id: sectionResponse.ok && sectionResult.id ? sectionResult.id : null,
+          response: {
+            status: sectionResponse.status,
+            ok: sectionResponse.ok,
+            result: sectionResult
+          }
+        };
+      } catch (err) {
+        return {
+          index: i + 1,
+          name: section.name,
+          style: section.style_name,
+          id: null,
+          response: {
+            status: 500,
+            ok: false,
+            result: err.message
+          }
+        };
+      }
+    });
+
+    const sectionResults = await Promise.all(sectionPromises);
+
+    // Build section ID map
+    const sectionIdMap = {};
+    sectionResults.forEach(result => {
+      if (result.id) {
+        sectionIdMap[result.name] = result.id;
+      }
+    });
 
     // ============================================
-    // STEP 3: Add Line Items
+    // STEP 3: Add Line Items (PARALLEL)
     // ============================================
-    const itemResults = [];
-
-    for (let i = 0; i < lineItems.length; i++) {
-      const item = lineItems[i];
-      
+    const itemPromises = lineItems.map(async (item, i) => {
       const sectionId = sectionIdMap[item.sectionName] || null;
 
       const itemPayload = {
@@ -172,7 +184,6 @@ export default async function handler(req, res) {
         sales_tax_code: '20% (VAT on Income)',
         ...(sectionId && { section_id: sectionId }),
         custom_fields: [
-         
           { label: 'Sheets', value: String(item.sheets || 0) },
           { label: 'Prints', value: String(item.prints || 0) },
           { label: 'WoodgrainType', value: item.woodgrainType || '' },
@@ -182,36 +193,53 @@ export default async function handler(req, res) {
         ]
       };
 
-      const addResponse = await fetch(`${ZIGAFLOW_BASE_URL}/v1/jobs/${jobId}/addItem`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-API-Key': ZIGAFLOW_API_KEY
-        },
-        body: JSON.stringify(itemPayload)
-      });
+      try {
+        const addResponse = await fetch(`${ZIGAFLOW_BASE_URL}/v1/jobs/${jobId}/addItem`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-API-Key': ZIGAFLOW_API_KEY
+          },
+          body: JSON.stringify(itemPayload)
+        });
 
-      const addText = await addResponse.text();
-      let addResult;
-      try { 
-        addResult = JSON.parse(addText); 
-      } catch(e) { 
-        addResult = addText; 
-      }
-
-      itemResults.push({
-        index: i + 1,
-        design: item.design,
-        productCode: item.productCode,
-        sectionName: item.sectionName,
-        sectionId: sectionId,
-        response: {
-          status: addResponse.status,
-          ok: addResponse.ok,
-          result: addResult
+        const addText = await addResponse.text();
+        let addResult;
+        try { 
+          addResult = JSON.parse(addText); 
+        } catch(e) { 
+          addResult = addText; 
         }
-      });
-    }
+
+        return {
+          index: i + 1,
+          design: item.design,
+          productCode: item.productCode,
+          sectionName: item.sectionName,
+          sectionId: sectionId,
+          response: {
+            status: addResponse.status,
+            ok: addResponse.ok,
+            result: addResult
+          }
+        };
+      } catch (err) {
+        return {
+          index: i + 1,
+          design: item.design,
+          productCode: item.productCode,
+          sectionName: item.sectionName,
+          sectionId: sectionId,
+          response: {
+            status: 500,
+            ok: false,
+            result: err.message
+          }
+        };
+      }
+    });
+
+    const itemResults = await Promise.all(itemPromises);
 
     // ============================================
     // STEP 4: Return Results
@@ -220,9 +248,9 @@ export default async function handler(req, res) {
       success: true,
       jobId: jobId,
       jobNumber: jobNumber,
-      sectionsCreated: sectionResults.length,
+      sectionsCreated: sectionResults.filter(s => s.id).length,
       sectionResults: sectionResults,
-      itemsCreated: itemResults.length,
+      itemsCreated: itemResults.filter(i => i.response.ok).length,
       itemResults: itemResults,
       message: `Created job ${jobNumber} with ${sectionResults.length} sections and ${itemResults.length} items`
     });
