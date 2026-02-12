@@ -56,7 +56,7 @@ export default async function handler(req, res) {
 
     console.log(`✅ Fetched ${allClients.length} total clients from Zigaflow`);
 
-    // ✅ NEW: Filter to only sync customers with "Softr" tag
+    // ✅ Filter to only sync customers with "Softr" tag
     const clients = allClients.filter(client => {
       if (!Array.isArray(client.tags)) return false;
       return client.tags.some(tag => {
@@ -195,6 +195,13 @@ export default async function handler(req, res) {
           [fieldMap['Last Synced']]: new Date().toISOString()
         };
 
+        // Remove any undefined keys (fields that don't exist in Softr table)
+        Object.keys(softrData).forEach(key => {
+          if (key === 'undefined' || softrData[key] === undefined) {
+            delete softrData[key];
+          }
+        });
+
         // Check if customer already exists
         const existingCustomer = existingCustomers.find(record => 
           record.fields[fieldMap['Zigaflow Client ID']] === client.id.toString() ||
@@ -205,7 +212,7 @@ export default async function handler(req, res) {
           // Update existing
           console.log(`   🔄 Updating existing customer (ID: ${existingCustomer.id})`);
           
-          await fetch(
+          const updateResponse = await fetch(
             `https://tables-api.softr.io/api/v1/databases/${process.env.SOFTR_DATABASE_ID}/tables/${process.env.SOFTR_CUSTOMERS_TABLE_ID}/records/${existingCustomer.id}`,
             {
               method: 'PATCH',
@@ -217,14 +224,20 @@ export default async function handler(req, res) {
             }
           );
           
+          if (!updateResponse.ok) {
+            const errorText = await updateResponse.text();
+            throw new Error(`Softr update failed: ${updateResponse.status} - ${errorText}`);
+          }
+          
           updatedCount++;
           console.log(`   ✅ Updated`);
 
         } else {
           // Create new
           console.log(`   ✨ Creating new customer`);
+          console.log(`   📦 Payload:`, JSON.stringify(softrData));
           
-          await fetch(
+          const createResponse = await fetch(
             `https://tables-api.softr.io/api/v1/databases/${process.env.SOFTR_DATABASE_ID}/tables/${process.env.SOFTR_CUSTOMERS_TABLE_ID}/records`,
             {
               method: 'POST',
@@ -235,6 +248,13 @@ export default async function handler(req, res) {
               body: JSON.stringify({ fields: softrData })
             }
           );
+          
+          const createResult = await createResponse.text();
+          console.log(`   📬 Softr response: ${createResponse.status} - ${createResult}`);
+          
+          if (!createResponse.ok) {
+            throw new Error(`Softr create failed: ${createResponse.status} - ${createResult}`);
+          }
           
           createdCount++;
           console.log(`   ✅ Created`);
