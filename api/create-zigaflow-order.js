@@ -48,7 +48,7 @@ export default async function handler(req, res) {
       reference: 'ORC-O',
       client_reference: poNumber,
       po_number: poNumber,
-      template_name: 'Job Upload Template',
+      template_name: 'Job API Template',
       estimated_delivery: body.requiredDeliveryDate 
         ? new Date(body.requiredDeliveryDate).toISOString() 
         : null,
