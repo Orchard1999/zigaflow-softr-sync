@@ -76,6 +76,7 @@ export default async function handler(req, res) {
           filtered: 0,
           created: 0,
           updated: 0,
+          skipped: 0,
           errors: 0
         },
         message: 'No clients with "Softr" tag found'
@@ -124,118 +125,140 @@ export default async function handler(req, res) {
 
     let createdCount = 0;
     let updatedCount = 0;
+    let skippedCount = 0;
     let errorCount = 0;
     const errors = [];
 
-    // Step 4: Sync each client
+    // Helper: Build the Softr data object for a Zigaflow client
+    function buildSoftrData(client) {
+      const primaryContact = client.contacts && client.contacts.length > 0 ? client.contacts[0] : null;
+
+      const primaryAddress = {
+        address1: client.address1,
+        address2: client.address2,
+        address3: client.address3,
+        town: client.town,
+        county: client.county,
+        postcode: client.postcode,
+        country: client.country
+      };
+
+      let billingAddress = '';
+      if (primaryAddress) {
+        const parts = [
+          primaryAddress.address1,
+          primaryAddress.address2,
+          primaryAddress.address3,
+          primaryAddress.town,
+          primaryAddress.county,
+          primaryAddress.postcode,
+          primaryAddress.country
+        ].filter(Boolean);
+        billingAddress = parts.join('\n');
+      }
+
+      let mainContact = '';
+      if (primaryContact) {
+        const nameParts = [
+          primaryContact.title,
+          primaryContact.first_name,
+          primaryContact.last_name
+        ].filter(Boolean);
+        mainContact = nameParts.join(' ');
+      }
+
+      let tagsString = '';
+      if (Array.isArray(client.tags) && client.tags.length > 0) {
+        tagsString = client.tags.map(tag => tag.value || tag).filter(Boolean).join(', ');
+      }
+
+      const data = {
+        [fieldMap['Customer Name']]: client.name || '',
+        [fieldMap['Email']]: primaryContact?.email || client.email || '',
+        [fieldMap['Main Contact']]: mainContact,
+        [fieldMap['Main Contact ID']]: primaryContact?.id || '',
+        [fieldMap['Main Contact Email']]: primaryContact?.email || client.email || '',
+        [fieldMap['Billing Address']]: billingAddress,
+        [fieldMap['Zigaflow Client ID']]: client.id.toString(),
+        [fieldMap['Price List']]: client.price_list?.id || '',
+        [fieldMap['Price List Name']]: client.price_list?.value || '',
+        [fieldMap['Account Manager']]: client.account_manager?.value || '',
+        [fieldMap['Account Manager ID']]: client.account_manager?.id || '',
+        [fieldMap['Tags']]: tagsString
+      };
+
+      // Remove any undefined keys
+      Object.keys(data).forEach(key => {
+        if (key === 'undefined' || data[key] === undefined) {
+          delete data[key];
+        }
+      });
+
+      return data;
+    }
+
+    // Helper: Check if Softr record needs updating by comparing field values
+    function needsUpdate(existingRecord, newData) {
+      for (const [key, newValue] of Object.entries(newData)) {
+        const existingValue = existingRecord.fields[key];
+        // Normalise both to strings for comparison (handles null/undefined/empty)
+        const normExisting = (existingValue === null || existingValue === undefined) ? '' : String(existingValue);
+        const normNew = (newValue === null || newValue === undefined) ? '' : String(newValue);
+        if (normExisting !== normNew) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    // Step 4: Sync each client — only write to Softr if data has changed
     for (const client of clients) {
       try {
-        console.log(`\n🔍 Processing: ${client.name}`);
+        const softrData = buildSoftrData(client);
 
-        // Get primary contact from embedded contacts array
-        const primaryContact = client.contacts && client.contacts.length > 0 ? client.contacts[0] : null;
-
-        // Always use client's direct address fields (not addresses array)
-        const primaryAddress = {
-          address1: client.address1,
-          address2: client.address2,
-          address3: client.address3,
-          town: client.town,
-          county: client.county,
-          postcode: client.postcode,
-          country: client.country
-        };
-
-        // Build billing address string
-        let billingAddress = '';
-        if (primaryAddress) {
-          const parts = [
-            primaryAddress.address1,
-            primaryAddress.address2,
-            primaryAddress.address3,
-            primaryAddress.town,
-            primaryAddress.county,
-            primaryAddress.postcode,
-            primaryAddress.country
-          ].filter(Boolean);
-          billingAddress = parts.join('\n');
-        }
-
-        // Build main contact name
-        let mainContact = '';
-        if (primaryContact) {
-          const nameParts = [
-            primaryContact.title,
-            primaryContact.first_name,
-            primaryContact.last_name
-          ].filter(Boolean);
-          mainContact = nameParts.join(' ');
-        }
-
-        // Extract tags values from objects
-        let tagsString = '';
-        if (Array.isArray(client.tags) && client.tags.length > 0) {
-          tagsString = client.tags.map(tag => tag.value || tag).filter(Boolean).join(', ');
-        }
-
-        // Map Zigaflow data to Softr fields
-        const softrData = {
-          [fieldMap['Customer Name']]: client.name || '',
-          [fieldMap['Email']]: primaryContact?.email || client.email || '',
-          [fieldMap['Main Contact']]: mainContact,
-          [fieldMap['Main Contact ID']]: primaryContact?.id || '',
-          [fieldMap['Main Contact Email']]: primaryContact?.email || client.email || '',
-          [fieldMap['Billing Address']]: billingAddress,
-          [fieldMap['Zigaflow Client ID']]: client.id.toString(),
-          [fieldMap['Price List']]: client.price_list?.id || '',
-          [fieldMap['Price List Name']]: client.price_list?.value || '',
-          [fieldMap['Account Manager']]: client.account_manager?.value || '',
-          [fieldMap['Account Manager ID']]: client.account_manager?.id || '',
-          [fieldMap['Tags']]: tagsString,
-          [fieldMap['Last Synced']]: new Date().toISOString()
-        };
-
-        // Remove any undefined keys (fields that don't exist in Softr table)
-        Object.keys(softrData).forEach(key => {
-          if (key === 'undefined' || softrData[key] === undefined) {
-            delete softrData[key];
-          }
-        });
-
-        // Check if customer already exists
+        // Check if customer already exists in Softr
         const existingCustomer = existingCustomers.find(record => 
           record.fields[fieldMap['Zigaflow Client ID']] === client.id.toString() ||
           record.fields[fieldMap['Customer Name']] === client.name
         );
 
         if (existingCustomer) {
-          // Update existing
-          console.log(`   🔄 Updating existing customer (ID: ${existingCustomer.id})`);
-          
-          const updateResponse = await fetch(
-            `https://tables-api.softr.io/api/v1/databases/${process.env.SOFTR_DATABASE_ID}/tables/${process.env.SOFTR_CUSTOMERS_TABLE_ID}/records/${existingCustomer.id}`,
-            {
-              method: 'PATCH',
-              headers: {
-                'Softr-Api-Key': process.env.SOFTR_API_KEY,
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({ fields: softrData })
+          // ✅ DIFF CHECK: Only update if data has actually changed
+          if (needsUpdate(existingCustomer, softrData)) {
+            // Add Last Synced timestamp only when actually writing
+            softrData[fieldMap['Last Synced']] = new Date().toISOString();
+
+            console.log(`   🔄 Updating changed customer: ${client.name}`);
+            
+            const updateResponse = await fetch(
+              `https://tables-api.softr.io/api/v1/databases/${process.env.SOFTR_DATABASE_ID}/tables/${process.env.SOFTR_CUSTOMERS_TABLE_ID}/records/${existingCustomer.id}`,
+              {
+                method: 'PATCH',
+                headers: {
+                  'Softr-Api-Key': process.env.SOFTR_API_KEY,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ fields: softrData })
+              }
+            );
+            
+            if (!updateResponse.ok) {
+              const errorText = await updateResponse.text();
+              throw new Error(`Softr update failed: ${updateResponse.status} - ${errorText}`);
             }
-          );
-          
-          if (!updateResponse.ok) {
-            const errorText = await updateResponse.text();
-            throw new Error(`Softr update failed: ${updateResponse.status} - ${errorText}`);
+            
+            updatedCount++;
+            console.log(`   ✅ Updated`);
+          } else {
+            // No changes — skip this customer entirely
+            skippedCount++;
           }
-          
-          updatedCount++;
-          console.log(`   ✅ Updated`);
 
         } else {
-          // Create new
-          console.log(`   ✨ Creating new customer`);
-          console.log(`   📦 Payload:`, JSON.stringify(softrData));
+          // New customer — create
+          softrData[fieldMap['Last Synced']] = new Date().toISOString();
+
+          console.log(`   ✨ Creating new customer: ${client.name}`);
           
           const createResponse = await fetch(
             `https://tables-api.softr.io/api/v1/databases/${process.env.SOFTR_DATABASE_ID}/tables/${process.env.SOFTR_CUSTOMERS_TABLE_ID}/records`,
@@ -250,7 +273,6 @@ export default async function handler(req, res) {
           );
           
           const createResult = await createResponse.text();
-          console.log(`   📬 Softr response: ${createResponse.status} - ${createResult}`);
           
           if (!createResponse.ok) {
             throw new Error(`Softr create failed: ${createResponse.status} - ${createResult}`);
@@ -276,6 +298,7 @@ export default async function handler(req, res) {
     console.log(`   With "Softr" tag: ${clients.length}`);
     console.log(`   Created: ${createdCount}`);
     console.log(`   Updated: ${updatedCount}`);
+    console.log(`   Skipped (unchanged): ${skippedCount}`);
     console.log(`   Errors: ${errorCount}`);
     console.log('═══════════════════════════════════════');
 
@@ -286,6 +309,7 @@ export default async function handler(req, res) {
         filteredWithSoftrTag: clients.length,
         created: createdCount,
         updated: updatedCount,
+        skipped: skippedCount,
         errors: errorCount
       },
       errors: errors.length > 0 ? errors : undefined
