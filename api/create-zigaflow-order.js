@@ -1,5 +1,5 @@
 // /api/create-zigaflow-order.js
-// VERSION 12 - Parallel API calls for speed
+// VERSION 13 - Added assigned_user (Account Manager) and fixed contact ID
 
 export default async function handler(req, res) {
   // CORS headers
@@ -13,7 +13,7 @@ export default async function handler(req, res) {
 
   if (req.method === 'GET') {
     return res.status(200).json({ 
-      message: 'Zigaflow Create Order - v12 (parallel API calls)',
+      message: 'Zigaflow Create Order - v13 (with assigned_user)',
       timestamp: new Date().toISOString()
     });
   }
@@ -39,10 +39,17 @@ export default async function handler(req, res) {
         id: body.zigaflowClientId || '',
         value: body.customerName || ''
       },
+      // Contact - now using mainContactId correctly
       ...(body.mainContactId && {
         contact: {
           id: body.mainContactId,
           value: body.mainContactName || ''
+        }
+      }),
+      // Assigned User (Account Manager) - NEW!
+      ...(body.accountManagerId && {
+        assigned_user: {
+          id: body.accountManagerId
         }
       }),
       reference: 'ORC-O',
@@ -97,7 +104,8 @@ export default async function handler(req, res) {
         success: false,
         step: 'CREATE_JOB',
         zigaflowStatus: jobResponse.status,
-        zigaflowResponse: jobResult
+        zigaflowResponse: jobResult,
+        payloadSent: jobPayload
       });
     }
 
@@ -248,6 +256,8 @@ export default async function handler(req, res) {
       success: true,
       jobId: jobId,
       jobNumber: jobNumber,
+      assignedUserId: body.accountManagerId || 'not provided',
+      contactId: body.mainContactId || 'not provided',
       sectionsCreated: sectionResults.filter(s => s.id).length,
       sectionResults: sectionResults,
       itemsCreated: itemResults.filter(i => i.response.ok).length,
