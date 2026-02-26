@@ -1,5 +1,5 @@
 // /api/create-zigaflow-order.js
-// VERSION 13 - Added assigned_user (Account Manager) and fixed contact ID
+// VERSION 14 - Trying email for assigned_user
 
 export default async function handler(req, res) {
   // CORS headers
@@ -13,7 +13,7 @@ export default async function handler(req, res) {
 
   if (req.method === 'GET') {
     return res.status(200).json({ 
-      message: 'Zigaflow Create Order - v13 (with assigned_user)',
+      message: 'Zigaflow Create Order - v14 (email for assigned_user)',
       timestamp: new Date().toISOString()
     });
   }
@@ -39,18 +39,18 @@ export default async function handler(req, res) {
         id: body.zigaflowClientId || '',
         value: body.customerName || ''
       },
-      // Contact - now using mainContactId correctly
+      // Contact - using mainContactId
       ...(body.mainContactId && {
         contact: {
           id: body.mainContactId,
           value: body.mainContactName || ''
         }
       }),
-      // Assigned User (Account Manager) - with value field
-      ...(body.accountManagerId && {
+      // Assigned User - TRY EMAIL instead of UUID
+      // The Excel import uses email, so maybe the API does too
+      ...(body.assignedUserEmail && {
         assigned_user: {
-          id: body.accountManagerId,
-          value: body.assignedUserEmail || ''
+          value: body.assignedUserEmail
         }
       }),
       reference: 'ORC-O',
@@ -257,7 +257,7 @@ export default async function handler(req, res) {
       success: true,
       jobId: jobId,
       jobNumber: jobNumber,
-      assignedUserId: body.accountManagerId || 'not provided',
+      assignedUserEmail: body.assignedUserEmail || 'not provided',
       contactId: body.mainContactId || 'not provided',
       sectionsCreated: sectionResults.filter(s => s.id).length,
       sectionResults: sectionResults,
