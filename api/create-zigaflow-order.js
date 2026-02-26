@@ -46,10 +46,11 @@ export default async function handler(req, res) {
           value: body.mainContactName || ''
         }
       }),
-      // Assigned User (Account Manager) - NEW!
+      // Assigned User (Account Manager) - with value field
       ...(body.accountManagerId && {
         assigned_user: {
-          id: body.accountManagerId
+          id: body.accountManagerId,
+          value: body.assignedUserEmail || ''
         }
       }),
       reference: 'ORC-O',
