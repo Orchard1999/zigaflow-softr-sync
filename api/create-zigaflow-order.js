@@ -1,5 +1,5 @@
 // /api/create-zigaflow-order.js
-// VERSION 15 - Using accountManagerId for assigned_user
+// VERSION 16 - Email-to-UUID fallback for assigned_user
 
 export default async function handler(req, res) {
   // CORS headers
@@ -13,7 +13,7 @@ export default async function handler(req, res) {
 
   if (req.method === 'GET') {
     return res.status(200).json({ 
-      message: 'Zigaflow Create Order - v15 (id for assigned_user)',
+      message: 'Zigaflow Create Order - v16 (email-to-UUID fallback)',
       timestamp: new Date().toISOString()
     });
   }
@@ -25,11 +25,22 @@ export default async function handler(req, res) {
   const ZIGAFLOW_API_KEY = process.env.ZIGAFLOW_API_KEY;
   const ZIGAFLOW_BASE_URL = process.env.ZIGAFLOW_BASE_URL;
 
+  const EMAIL_TO_UUID = {
+    'ben@orchard-melamine.co.uk': '46c2aaa0-a23a-49eb-8c29-439b63ed992c',
+    'coasters@orchard-melamine.co.uk': 'ed30b063-e0c9-40ec-89e3-df669029d623',
+    'accounts@orchard-melamine.co.uk': '3e69ac02-24eb-42b7-ae1a-dedcd3aed0e4',
+    'rachel@orchard-melamine.co.uk': '7af586da-ed67-426f-b762-6c0d3f6a5539',
+    'enquiries@orchard-melamine.co.uk': 'c766531c-f48b-42c2-9e9d-74e535494a62'
+  };
+
   try {
     const body = req.body || {};
     const lineItems = body.lineItems || [];
     const sections = body.sections || [];
     const poNumber = body.poNumber || '';
+
+    // Resolve assigned user UUID - direct ID first, then email lookup
+    const assignedUserId = body.accountManagerId || EMAIL_TO_UUID[(body.assignedUserEmail || '').toLowerCase()] || '';
 
     // ============================================
     // STEP 1: Create Job
@@ -45,9 +56,9 @@ export default async function handler(req, res) {
           value: body.mainContactName || ''
         }
       }),
-      ...(body.accountManagerId && {
+      ...(assignedUserId && {
         assigned_user: {
-          id: body.accountManagerId,
+          id: assignedUserId,
           value: body.assignedUserEmail || ''
         }
       }),
@@ -255,6 +266,7 @@ export default async function handler(req, res) {
       success: true,
       jobId: jobId,
       jobNumber: jobNumber,
+      assignedUserId: assignedUserId || 'not resolved',
       assignedUserEmail: body.assignedUserEmail || 'not provided',
       contactId: body.mainContactId || 'not provided',
       sectionsCreated: sectionResults.filter(s => s.id).length,
