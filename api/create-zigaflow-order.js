@@ -1,5 +1,5 @@
 // /api/create-zigaflow-order.js
-// VERSION 16 - Email-to-UUID fallback for assigned_user
+// VERSION 17 - Added detailed_description as standard field + email-to-UUID fallback
 
 export default async function handler(req, res) {
   // CORS headers
@@ -13,7 +13,7 @@ export default async function handler(req, res) {
 
   if (req.method === 'GET') {
     return res.status(200).json({ 
-      message: 'Zigaflow Create Order - v16 (email-to-UUID fallback)',
+      message: 'Zigaflow Create Order - v17 (detailed_description + email-to-UUID)',
       timestamp: new Date().toISOString()
     });
   }
@@ -194,6 +194,7 @@ export default async function handler(req, res) {
       const itemPayload = {
         product_code: item.productCode || '',
         description: item.design || '',
+        detailed_description: item.detailedDescription || '',
         quantity: parseInt(item.quantity) || 0,
         price: parseFloat(item.price) || 0,
         unit_price: parseFloat(item.price) || 0,
