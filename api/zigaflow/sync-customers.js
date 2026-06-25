@@ -3,7 +3,7 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  
+
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
@@ -14,6 +14,35 @@ export default async function handler(req, res) {
 
   if (!isVercelCron && authHeader !== `Bearer ${process.env.ADMIN_API_KEY}`) {
     return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  // 🏷️  The contact tag that marks the chosen contact in Zigaflow.
+  // If a contact carries this tag, the sync uses it. Otherwise it falls
+  // back to the first contact in the array (original behaviour).
+  // Matched by name OR id — id is the safest as it survives renames.
+  const CONTACT_TAG_NAME = 'Portal Contact';
+  const CONTACT_TAG_ID = '9c6f91d8-2e54-483e-97e3-00b2bd31e865';
+
+  // Helper: does a contact carry the Portal Contact tag?
+  // Handles tags as strings, { name }, { value }, or { id } shapes.
+  function hasContactTag(contact) {
+    if (!contact || !Array.isArray(contact.tags)) return false;
+    return contact.tags.some(tag => {
+      if (typeof tag === 'string') {
+        return tag.trim().toLowerCase() === CONTACT_TAG_NAME.toLowerCase();
+      }
+      if (tag && typeof tag === 'object') {
+        const label = (tag.name || tag.value || '').trim().toLowerCase();
+        return label === CONTACT_TAG_NAME.toLowerCase() || tag.id === CONTACT_TAG_ID;
+      }
+      return false;
+    });
+  }
+
+  // Helper: pick the tagged contact if one exists, otherwise the first contact
+  function getPrimaryContact(client) {
+    if (!client.contacts || client.contacts.length === 0) return null;
+    return client.contacts.find(hasContactTag) || client.contacts[0];
   }
 
   try {
@@ -46,10 +75,10 @@ export default async function handler(req, res) {
       const clientsData = await clientsResponse.json();
       const batch = clientsData.data || [];
       totalCount = clientsData.total_count || 0;
-      
+
       allClients = allClients.concat(batch);
       console.log(`   📄 Page ${Math.floor(skip / top) + 1}: Fetched ${batch.length} clients (Total: ${allClients.length}/${totalCount})`);
-      
+
       hasMore = batch.length === top;
       skip += top;
     }
@@ -99,7 +128,7 @@ export default async function handler(req, res) {
 
     const schemaData = await schemaResponse.json();
     const fields = schemaData.data.fields || [];
-    
+
     // Create field mapping
     const fieldMap = {};
     fields.forEach(field => {
@@ -120,7 +149,7 @@ export default async function handler(req, res) {
 
     const existingData = await existingResponse.json();
     const existingCustomers = existingData.data || [];
-    
+
     console.log(`📊 Found ${existingCustomers.length} existing customers in Softr`);
 
     let createdCount = 0;
@@ -131,7 +160,8 @@ export default async function handler(req, res) {
 
     // Helper: Build the Softr data object for a Zigaflow client
     function buildSoftrData(client) {
-      const primaryContact = client.contacts && client.contacts.length > 0 ? client.contacts[0] : null;
+      // 🏷️  Use the tagged contact if present, otherwise the first contact
+      const primaryContact = getPrimaryContact(client);
 
       const primaryAddress = {
         address1: client.address1,
@@ -217,7 +247,7 @@ export default async function handler(req, res) {
         const softrData = buildSoftrData(client);
 
         // Check if customer already exists in Softr
-        const existingCustomer = existingCustomers.find(record => 
+        const existingCustomer = existingCustomers.find(record =>
           record.fields[fieldMap['Zigaflow Client ID']] === client.id.toString() ||
           record.fields[fieldMap['Customer Name']] === client.name
         );
@@ -229,7 +259,7 @@ export default async function handler(req, res) {
             softrData[fieldMap['Last Synced']] = new Date().toISOString();
 
             console.log(`   🔄 Updating changed customer: ${client.name}`);
-            
+
             const updateResponse = await fetch(
               `https://tables-api.softr.io/api/v1/databases/${process.env.SOFTR_DATABASE_ID}/tables/${process.env.SOFTR_CUSTOMERS_TABLE_ID}/records/${existingCustomer.id}`,
               {
@@ -241,12 +271,12 @@ export default async function handler(req, res) {
                 body: JSON.stringify({ fields: softrData })
               }
             );
-            
+
             if (!updateResponse.ok) {
               const errorText = await updateResponse.text();
               throw new Error(`Softr update failed: ${updateResponse.status} - ${errorText}`);
             }
-            
+
             updatedCount++;
             console.log(`   ✅ Updated`);
           } else {
@@ -259,7 +289,7 @@ export default async function handler(req, res) {
           softrData[fieldMap['Last Synced']] = new Date().toISOString();
 
           console.log(`   ✨ Creating new customer: ${client.name}`);
-          
+
           const createResponse = await fetch(
             `https://tables-api.softr.io/api/v1/databases/${process.env.SOFTR_DATABASE_ID}/tables/${process.env.SOFTR_CUSTOMERS_TABLE_ID}/records`,
             {
@@ -271,13 +301,13 @@ export default async function handler(req, res) {
               body: JSON.stringify({ fields: softrData })
             }
           );
-          
+
           const createResult = await createResponse.text();
-          
+
           if (!createResponse.ok) {
             throw new Error(`Softr create failed: ${createResponse.status} - ${createResult}`);
           }
-          
+
           createdCount++;
           console.log(`   ✅ Created`);
         }
@@ -317,7 +347,7 @@ export default async function handler(req, res) {
 
   } catch (error) {
     console.error('💥 Fatal sync error:', error);
-    return res.status(500).json({ 
+    return res.status(500).json({
       success: false,
       error: error.message,
       stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
