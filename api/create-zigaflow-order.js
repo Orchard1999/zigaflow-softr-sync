@@ -1,5 +1,69 @@
 // /api/create-zigaflow-order.js
-// VERSION 17 - Added detailed_description as standard field + email-to-UUID fallback
+// VERSION 18 - Concurrency-limited line items + retry + maxDuration
+//   Fixes timeouts on large orders (e.g. 121 line items) by replacing the
+//   "fire all addItem calls at once" pattern with a small worker pool.
+
+// Hobby plan has a HARD 60-second ceiling — this cannot be raised without
+// upgrading to Pro. The worker pool below is what keeps the run inside it.
+// If/when you move to Pro, you can raise this to 300 for extra headroom.
+export const config = {
+  maxDuration: 60
+};
+
+// ---- Tunables -------------------------------------------------------------
+const ITEM_CONCURRENCY = 4;   // how many addItem calls in flight at once
+const ITEM_GAP_MS      = 120; // small pause after each item to ease off Zigaflow
+const MAX_RETRIES      = 2;   // retry transient (429 / 5xx / network) failures
+const RETRY_BACKOFF_MS = 500; // base backoff, multiplied per attempt
+// ---------------------------------------------------------------------------
+
+// fetch wrapper that retries on rate-limit / server / network errors only
+async function fetchWithRetry(url, options, retries = MAX_RETRIES) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const resp = await fetch(url, options);
+      // Retry transient server-side conditions; return everything else as-is
+      if ((resp.status === 429 || resp.status >= 500) && attempt < retries) {
+        await sleep(RETRY_BACKOFF_MS * (attempt + 1));
+        continue;
+      }
+      return resp;
+    } catch (err) {
+      if (attempt < retries) {
+        await sleep(RETRY_BACKOFF_MS * (attempt + 1));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+// Worker-pool runner: keeps `concurrency` workers pulling from the queue,
+// so there are never more than `concurrency` requests in flight at once.
+// Results are returned in the original item order.
+async function runWithConcurrency(items, worker, concurrency, gapMs) {
+  const results = new Array(items.length);
+  let cursor = 0;
+
+  async function runner() {
+    while (cursor < items.length) {
+      const current = cursor++;
+      results[current] = await worker(items[current], current);
+      if (gapMs) await sleep(gapMs);
+    }
+  }
+
+  const runners = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    () => runner()
+  );
+  await Promise.all(runners);
+  return results;
+}
 
 export default async function handler(req, res) {
   // CORS headers
@@ -12,8 +76,8 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'GET') {
-    return res.status(200).json({ 
-      message: 'Zigaflow Create Order - v17 (detailed_description + email-to-UUID)',
+    return res.status(200).json({
+      message: 'Zigaflow Create Order - v18 (concurrency-limited + retry + maxDuration)',
       timestamp: new Date().toISOString()
     });
   }
@@ -66,11 +130,11 @@ export default async function handler(req, res) {
       client_reference: poNumber,
       po_number: poNumber,
       template_name: 'Job Upload Template',
-      estimated_delivery: body.requiredDeliveryDate 
-        ? new Date(body.requiredDeliveryDate).toISOString() 
+      estimated_delivery: body.requiredDeliveryDate
+        ? new Date(body.requiredDeliveryDate).toISOString()
         : null,
-      estimated_start: body.orderDate 
-        ? new Date(body.orderDate).toISOString() 
+      estimated_start: body.orderDate
+        ? new Date(body.orderDate).toISOString()
         : new Date().toISOString(),
       description: body.customerMessage || '',
       custom_fields: [
@@ -92,7 +156,7 @@ export default async function handler(req, res) {
       }
     };
 
-    const jobResponse = await fetch(`${ZIGAFLOW_BASE_URL}/v1/jobs`, {
+    const jobResponse = await fetchWithRetry(`${ZIGAFLOW_BASE_URL}/v1/jobs`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -103,10 +167,10 @@ export default async function handler(req, res) {
 
     const jobResponseText = await jobResponse.text();
     let jobResult;
-    try { 
-      jobResult = JSON.parse(jobResponseText); 
-    } catch(e) { 
-      jobResult = jobResponseText; 
+    try {
+      jobResult = JSON.parse(jobResponseText);
+    } catch (e) {
+      jobResult = jobResponseText;
     }
 
     if (!jobResponse.ok) {
@@ -123,59 +187,60 @@ export default async function handler(req, res) {
     const jobNumber = jobResult.number;
 
     // ============================================
-    // STEP 2: Create Sections (PARALLEL)
+    // STEP 2: Create Sections (limited concurrency)
+    // Usually only a handful of sections, but run them through the same
+    // controlled runner so they finish before any line items are added.
     // ============================================
-    const sectionPromises = sections.map(async (section, i) => {
-      const sectionPayload = {
-        name: section.name || '',
-        style_name: section.style_name || 'Products'
-      };
+    const sectionResults = await runWithConcurrency(
+      sections,
+      async (section, i) => {
+        const sectionPayload = {
+          name: section.name || '',
+          style_name: section.style_name || 'Products'
+        };
 
-      try {
-        const sectionResponse = await fetch(`${ZIGAFLOW_BASE_URL}/v1/jobs/${jobId}/addSection`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-API-Key': ZIGAFLOW_API_KEY
-          },
-          body: JSON.stringify(sectionPayload)
-        });
+        try {
+          const sectionResponse = await fetchWithRetry(`${ZIGAFLOW_BASE_URL}/v1/jobs/${jobId}/addSection`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-API-Key': ZIGAFLOW_API_KEY
+            },
+            body: JSON.stringify(sectionPayload)
+          });
 
-        const sectionText = await sectionResponse.text();
-        let sectionResult;
-        try { 
-          sectionResult = JSON.parse(sectionText); 
-        } catch(e) { 
-          sectionResult = sectionText; 
+          const sectionText = await sectionResponse.text();
+          let sectionResult;
+          try {
+            sectionResult = JSON.parse(sectionText);
+          } catch (e) {
+            sectionResult = sectionText;
+          }
+
+          return {
+            index: i + 1,
+            name: section.name,
+            style: section.style_name,
+            id: sectionResponse.ok && sectionResult.id ? sectionResult.id : null,
+            response: {
+              status: sectionResponse.status,
+              ok: sectionResponse.ok,
+              result: sectionResult
+            }
+          };
+        } catch (err) {
+          return {
+            index: i + 1,
+            name: section.name,
+            style: section.style_name,
+            id: null,
+            response: { status: 500, ok: false, result: err.message }
+          };
         }
-
-        return {
-          index: i + 1,
-          name: section.name,
-          style: section.style_name,
-          id: sectionResponse.ok && sectionResult.id ? sectionResult.id : null,
-          response: {
-            status: sectionResponse.status,
-            ok: sectionResponse.ok,
-            result: sectionResult
-          }
-        };
-      } catch (err) {
-        return {
-          index: i + 1,
-          name: section.name,
-          style: section.style_name,
-          id: null,
-          response: {
-            status: 500,
-            ok: false,
-            result: err.message
-          }
-        };
-      }
-    });
-
-    const sectionResults = await Promise.all(sectionPromises);
+      },
+      ITEM_CONCURRENCY,
+      ITEM_GAP_MS
+    );
 
     // Build section ID map
     const sectionIdMap = {};
@@ -186,83 +251,86 @@ export default async function handler(req, res) {
     });
 
     // ============================================
-    // STEP 3: Add Line Items (PARALLEL)
+    // STEP 3: Add Line Items (limited concurrency, was Promise.all over ALL)
+    // This is the change that fixes the timeout: never more than
+    // ITEM_CONCURRENCY addItem calls are in flight at once.
     // ============================================
-    const itemPromises = lineItems.map(async (item, i) => {
-      const sectionId = sectionIdMap[item.sectionName] || null;
+    const itemResults = await runWithConcurrency(
+      lineItems,
+      async (item, i) => {
+        const sectionId = sectionIdMap[item.sectionName] || null;
 
-      const itemPayload = {
-        product_code: item.productCode || '',
-        description: item.design || '',
-        detailed_description: item.detailedDescription || '',
-        quantity: parseInt(item.quantity) || 0,
-        price: parseFloat(item.price) || 0,
-        unit_price: parseFloat(item.price) || 0,
-        category: item.productRange || '',
-        sales_account_code: item.salesCode || '',
-        sales_tax_code: '20% (VAT on Income)',
-        ...(sectionId && { section_id: sectionId }),
-        custom_fields: [
-          { label: 'Sheets', value: String(item.sheets || 0) },
-          { label: 'Prints', value: String(item.prints || 0) },
-          { label: 'WoodgrainType', value: item.woodgrainType || '' },
-          { label: 'WoodgrainSheets', value: String(item.woodgrainSheets || 0) },
-          { label: 'WoodgrainPrints', value: String(item.woodgrainPrints || 0) },
-          { label: 'DetailedDescriptionD', value: item.detailedDescription || '' }
-        ]
-      };
+        const itemPayload = {
+          product_code: item.productCode || '',
+          description: item.design || '',
+          detailed_description: item.detailedDescription || '',
+          quantity: parseInt(item.quantity) || 0,
+          price: parseFloat(item.price) || 0,
+          unit_price: parseFloat(item.price) || 0,
+          category: item.productRange || '',
+          sales_account_code: item.salesCode || '',
+          sales_tax_code: '20% (VAT on Income)',
+          ...(sectionId && { section_id: sectionId }),
+          custom_fields: [
+            { label: 'Sheets', value: String(item.sheets || 0) },
+            { label: 'Prints', value: String(item.prints || 0) },
+            { label: 'WoodgrainType', value: item.woodgrainType || '' },
+            { label: 'WoodgrainSheets', value: String(item.woodgrainSheets || 0) },
+            { label: 'WoodgrainPrints', value: String(item.woodgrainPrints || 0) },
+            { label: 'DetailedDescriptionD', value: item.detailedDescription || '' }
+          ]
+        };
 
-      try {
-        const addResponse = await fetch(`${ZIGAFLOW_BASE_URL}/v1/jobs/${jobId}/addItem`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-API-Key': ZIGAFLOW_API_KEY
-          },
-          body: JSON.stringify(itemPayload)
-        });
+        try {
+          const addResponse = await fetchWithRetry(`${ZIGAFLOW_BASE_URL}/v1/jobs/${jobId}/addItem`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-API-Key': ZIGAFLOW_API_KEY
+            },
+            body: JSON.stringify(itemPayload)
+          });
 
-        const addText = await addResponse.text();
-        let addResult;
-        try { 
-          addResult = JSON.parse(addText); 
-        } catch(e) { 
-          addResult = addText; 
+          const addText = await addResponse.text();
+          let addResult;
+          try {
+            addResult = JSON.parse(addText);
+          } catch (e) {
+            addResult = addText;
+          }
+
+          return {
+            index: i + 1,
+            design: item.design,
+            productCode: item.productCode,
+            sectionName: item.sectionName,
+            sectionId: sectionId,
+            response: {
+              status: addResponse.status,
+              ok: addResponse.ok,
+              result: addResult
+            }
+          };
+        } catch (err) {
+          return {
+            index: i + 1,
+            design: item.design,
+            productCode: item.productCode,
+            sectionName: item.sectionName,
+            sectionId: sectionId,
+            response: { status: 500, ok: false, result: err.message }
+          };
         }
-
-        return {
-          index: i + 1,
-          design: item.design,
-          productCode: item.productCode,
-          sectionName: item.sectionName,
-          sectionId: sectionId,
-          response: {
-            status: addResponse.status,
-            ok: addResponse.ok,
-            result: addResult
-          }
-        };
-      } catch (err) {
-        return {
-          index: i + 1,
-          design: item.design,
-          productCode: item.productCode,
-          sectionName: item.sectionName,
-          sectionId: sectionId,
-          response: {
-            status: 500,
-            ok: false,
-            result: err.message
-          }
-        };
-      }
-    });
-
-    const itemResults = await Promise.all(itemPromises);
+      },
+      ITEM_CONCURRENCY,
+      ITEM_GAP_MS
+    );
 
     // ============================================
     // STEP 4: Return Results
     // ============================================
+    const failedItems = itemResults.filter(i => !i.response.ok);
+
     return res.status(200).json({
       success: true,
       jobId: jobId,
@@ -273,8 +341,10 @@ export default async function handler(req, res) {
       sectionsCreated: sectionResults.filter(s => s.id).length,
       sectionResults: sectionResults,
       itemsCreated: itemResults.filter(i => i.response.ok).length,
+      itemsFailed: failedItems.length,
+      failedItems: failedItems.map(i => ({ index: i.index, design: i.design, productCode: i.productCode, status: i.response.status })),
       itemResults: itemResults,
-      message: `Created job ${jobNumber} with ${sectionResults.length} sections and ${itemResults.length} items`
+      message: `Created job ${jobNumber} with ${sectionResults.length} sections and ${itemResults.length} items (${failedItems.length} failed)`
     });
 
   } catch (error) {
