@@ -4,28 +4,26 @@ export default async function handler(req, res) {
   }
 
   const { id } = req.query;
-
   if (!id) {
     return res.status(400).json({ error: 'Missing required query param: id' });
   }
 
-const ZF_API_KEY = process.env.ZIGAFLOW_API_KEY;
-const ZF_BASE_URL = process.env.ZIGAFLOW_BASE_URL;
-  if (!ZF_API_KEY || !ZF_BASE_URL) {
-    return res.status(500).json({ error: 'Server misconfiguration: missing ZF env vars' });
+  const ZF_BASE = process.env.ZIGAFLOW_BASE_URL;
+  const ZF_KEY  = process.env.ZIGAFLOW_API_KEY;
+
+  if (!ZF_BASE || !ZF_KEY) {
+    return res.status(500).json({ error: 'Server misconfiguration: missing Zigaflow env vars' });
   }
 
   try {
-    const response = await fetch(
-      `${ZF_BASE_URL}/jobs/${encodeURIComponent(id)}`,
-      {
-        method: 'GET',
-        headers: {
-          'X-Api-Key': ZF_API_KEY,
-          'Accept': 'application/json'
-        }
+    const response = await fetch(`${ZF_BASE}/api/jobs/${encodeURIComponent(id)}`, {
+      method: 'GET',
+      headers: {
+        'X-Api-Key': ZF_KEY,
+        'Accept': 'application/json',
+        'Zigaflow-Api-Version': '2'
       }
-    );
+    });
 
     const data = await response.json().catch(() => null);
 
