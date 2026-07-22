@@ -1,5 +1,4 @@
 export default async function handler(req, res) {
-  // Only GET requests
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -10,23 +9,27 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Missing required query param: id' });
   }
 
-  const apiKey = process.env.ZIGAFLOW_API_KEY;
-  if (!apiKey) {
-    return res.status(500).json({ error: 'Server misconfiguration: no API key' });
+  const ZF_API_KEY = process.env.ZF_API_KEY;
+  const ZF_BASE_URL = process.env.ZF_BASE_URL;
+
+  if (!ZF_API_KEY || !ZF_BASE_URL) {
+    return res.status(500).json({ error: 'Server misconfiguration: missing ZF env vars' });
   }
 
   try {
-    const response = await fetch(`https://api.zigaflow.com/v1/jobs/${encodeURIComponent(id)}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Accept': 'application/json'
+    const response = await fetch(
+      `${ZF_BASE_URL}/jobs/${encodeURIComponent(id)}`,
+      {
+        method: 'GET',
+        headers: {
+          'X-Api-Key': ZF_API_KEY,
+          'Accept': 'application/json'
+        }
       }
-    });
+    );
 
     const data = await response.json().catch(() => null);
 
-    // Pass through Zigaflow's status code and body
     if (!response.ok) {
       return res.status(response.status).json({
         error: 'Zigaflow API returned non-2xx',
