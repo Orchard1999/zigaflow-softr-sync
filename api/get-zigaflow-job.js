@@ -16,12 +16,11 @@ export default async function handler(req, res) {
   }
 
   try {
-    const response = await fetch(`${ZF_BASE}/api/jobs/${encodeURIComponent(id)}`, {
+    const response = await fetch(`${ZF_BASE}/v1/jobs/${encodeURIComponent(id)}`, {
       method: 'GET',
       headers: {
         'X-Api-Key': ZF_KEY,
-        'Accept': 'application/json',
-        'Zigaflow-Api-Version': '2'
+        'Accept': 'application/json'
       }
     });
 
