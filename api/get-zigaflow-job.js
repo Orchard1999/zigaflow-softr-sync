@@ -9,9 +9,8 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Missing required query param: id' });
   }
 
-  const ZF_API_KEY = process.env.ZF_API_KEY;
-  const ZF_BASE_URL = process.env.ZF_BASE_URL;
-
+const ZF_API_KEY = process.env.ZIGAFLOW_API_KEY;
+const ZF_BASE_URL = process.env.ZIGAFLOW_BASE_URL;
   if (!ZF_API_KEY || !ZF_BASE_URL) {
     return res.status(500).json({ error: 'Server misconfiguration: missing ZF env vars' });
   }
